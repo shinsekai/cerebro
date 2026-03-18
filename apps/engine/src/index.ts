@@ -1,12 +1,13 @@
+import 'dotenv/config';
 import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { streamSSE } from 'hono/streaming';
 import color from 'picocolors';
-import { 
-  saveStateTicket, 
-  getStateTicket, 
-  saveMemoryTicket, 
-  searchSimilarMemory 
+import {
+  saveStateTicket,
+  getStateTicket,
+  saveMemoryTicket,
+  searchSimilarMemory
 } from '@cerebro/database';
 import { StateTicketSchema, MemoryTicketSchema, CircuitBreaker } from '@cerebro/core';
 import { OrchestratorAgent, frontendAgent, backendAgent, testerAgent, qualityAgent, securityAgent } from '@cerebro/agents';
@@ -61,6 +62,21 @@ app.post('/memory/search', async (c) => {
   }
 });
 
+// --- Helper to clean raw API Error JSON strings ---
+const cleanErrorMessage = (msg: string | undefined): string => {
+  if (!msg) return 'Unknown error';
+  try {
+    const match = msg.match(/^\d{3}\s+({.*})$/);
+    if (match && match[1]) {
+      const parsed = JSON.parse(match[1]);
+      if (parsed?.error?.message) {
+        return parsed.error.message;
+      }
+    }
+  } catch (e) {}
+  return msg;
+};
+
 // --- Mesh Router (Server-Sent Events) ---
 app.post('/mesh/loop', async (c) => {
   const body = await c.req.json();
@@ -86,26 +102,26 @@ app.post('/mesh/loop', async (c) => {
     try {
       await pushLog(`Initializing Mesh Loop for Ticket: ${ticket.id}`, color.gray);
       await pushLog(`Task: "${ticket.task}"`, color.bold);
-      
+
       const orchestrator = new OrchestratorAgent();
       await pushLog(`[Tier 1 Orchestrator] Analyzing request and planning constraints...`, color.magenta);
       const plan: any = await orchestrator.planExecution(ticket.task);
       orchestratorTokens += extractTokens(plan);
       await pushLog(`[Tier 1 Orchestrator] Plan generated successfully. (${extractTokens(plan)} tokens)`, color.green);
-      
+
       ticket.status = 'in-progress';
       await saveStateTicket(ticket);
 
       while (CircuitBreaker.check(ticket)) {
         try {
           await pushLog(`[Circuit Breaker] Starting Iteration ${ticket.retry_count + 1}/3...`, color.yellow);
-          
+
           await pushLog(`[Tier 2 Backend] Writing API and code logic...`, color.magenta);
           const codeResult: any = await backendAgent.invoke({ context: ticket.task + "\nPlan: " + JSON.stringify(plan.content) });
           const bTokens = extractTokens(codeResult);
           backendTokens += bTokens;
           await pushLog(`[Tier 2 Backend] Generated ${String(codeResult.content).length} characters of code. (${bTokens} tokens)`, color.green);
-          
+
           await pushLog(`[Tier 2 Frontend] Writing UI components...`, color.magenta);
           const frontendResult: any = await frontendAgent.invoke({ context: ticket.task + "\\nBackend Code: " + String(codeResult.content) });
           const fTokens = extractTokens(frontendResult);
@@ -133,29 +149,30 @@ app.post('/mesh/loop', async (c) => {
           ticket.status = 'completed';
           ticket.context = { code: codeResult.content, tests: testResult.content };
           await saveStateTicket(ticket);
-          
+
           await pushLog(`[Mesh] Pipeline successfully achieved consensus. Halting.`, color.cyan);
-          
+
           const totalTokens = orchestratorTokens + backendTokens + frontendTokens + qualityTokens + securityTokens + testerTokens;
           console.log(color.bgBlue(color.white(`\n 📊 Total Tokens Consumed: ${totalTokens} \n`)));
-          
-          const tokenUsage = { 
-            orchestrator: orchestratorTokens, 
+
+          const tokenUsage = {
+            orchestrator: orchestratorTokens,
             frontend: frontendTokens,
-            backend: backendTokens, 
+            backend: backendTokens,
             quality: qualityTokens,
             security: securityTokens,
-            tester: testerTokens, 
-            total: totalTokens 
+            tester: testerTokens,
+            total: totalTokens
           };
           await stream.writeSSE({ event: 'done', data: JSON.stringify({ success: true, ticket, usage: tokenUsage }) });
-          break; 
+          break;
 
         } catch (agentError: any) {
-          await pushLog(`[Mesh Error] ${agentError.message}`, color.red);
-          CircuitBreaker.recordFailure(ticket, agentError.message);
+          const cleanMsg = cleanErrorMessage(agentError?.message);
+          await pushLog(`[Mesh Error] ${cleanMsg}`, color.red);
+          CircuitBreaker.recordFailure(ticket, cleanMsg);
           await saveStateTicket(ticket);
-          
+
           if ((ticket.status as string) === 'halted') {
             console.error(`[Mesh] Circuit Breaker tripped: Terminal failure for ${ticket.id}.`);
             await stream.writeSSE({ event: 'error', data: JSON.stringify({ success: false, error: 'Circuit Breaker broken: Infinite Loop Stopped.', ticket }) });
@@ -166,7 +183,7 @@ app.post('/mesh/loop', async (c) => {
       }
     } catch (error: any) {
       console.error(color.red(`[Mesh] Fatal Error:`), error);
-      await stream.writeSSE({ event: 'error', data: JSON.stringify({ success: false, error: error.message }) });
+      await stream.writeSSE({ event: 'error', data: JSON.stringify({ success: false, error: cleanErrorMessage(error?.message) }) });
     }
   });
 });
