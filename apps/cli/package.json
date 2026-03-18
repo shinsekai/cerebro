@@ -1,0 +1,17 @@
+{
+  "name": "@cerebro/cli",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "cerebro": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --compile --outfile cerebro"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "picocolors": "^1.0.0",
+    "@cerebro/core": "workspace:*"
+  }
+}

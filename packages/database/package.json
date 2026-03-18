@@ -1,0 +1,10 @@
+{
+  "name": "@cerebro/database",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "postgres": "^3.4.3",
+    "pgvector": "^0.1.8"
+  }
+}
