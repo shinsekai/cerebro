@@ -36,6 +36,6 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: '--model claude-sonnet-4.6'
+          claude_args: '--model claude-sonnet-4-6'
           prompt: 'Review the changes in this pull request. Provide constructive feedback on code quality, potential bugs, and improvements. Post your review as comments on the PR.'
 
