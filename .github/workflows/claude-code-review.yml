@@ -39,6 +39,6 @@ jobs:
           prompt: 'Review the changes in this pull request. Provide constructive feedback on code quality, potential bugs, and improvements. Post your review as comments on the PR.'
           claude_args: |
             --append-system-prompt "Follow our coding standards"
-            --max-turns 5
+            --max-turns 10
             --model claude-sonnet-4-6         
 

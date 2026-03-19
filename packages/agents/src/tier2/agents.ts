@@ -7,16 +7,22 @@ export const createAgentFlow = (roleDescription: string) => {
   // Returns a Runnable sequence that can be invoked across the Mesh loop.
   return PromptTemplate.fromTemplate(`
     ${roleDescription}
-    
+
     You are operating within Cerebro, an enterprise AI codebase orchestration platform.
-    Your output MUST strictly be the required code, configuration, or trace required by your role. 
+    Your output MUST strictly be the required code, configuration, or trace required by your role.
     You MUST adhere strictly to the KISS (Keep It Simple, Stupid) and DRY (Don't Repeat Yourself) principles. Avoid over-engineering.
-    Do NOT include markdown wrapping like \`\`\`typescript unless you are outputting a cohesive file block.
+
+    IMPORTANT: When outputting file content, use this format:
+    // FILE: path/to/file.ext
+    <file content here>
+
+    You can output multiple files by using multiple FILE markers.
+    Do NOT include markdown wrapping like \`\`\`typescript.
     Do NOT include conversational filler like "Here is the code" or "I understand".
-    
+
     Context and Requirements from upstream Agents:
     {context}
-    
+
     Execute your specialized task below. Ensure extreme precision.
   `).pipe(model as any);
 };

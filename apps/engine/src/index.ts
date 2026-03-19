@@ -9,12 +9,39 @@ import {
   saveMemoryTicket,
   searchSimilarMemory
 } from '@cerebro/database';
-import { StateTicketSchema, MemoryTicketSchema, CircuitBreaker } from '@cerebro/core';
+import { StateTicketSchema, MemoryTicketSchema, CircuitBreaker, ApprovalResponseSchema, ApprovalResponse, FileChange } from '@cerebro/core';
 import { OrchestratorAgent, frontendAgent, backendAgent, testerAgent, qualityAgent, securityAgent, opsAgent } from '@cerebro/agents';
+import path from 'path';
+import fs from 'fs/promises';
 
 const app = new Hono();
 
 app.use('*', logger());
+
+// In-memory approval state storage
+const approvalResponses = new Map<string, ApprovalResponse>();
+
+// Store workspace root per ticket
+const ticketWorkspaceRoots = new Map<string, string>();
+
+// Helper to wait for user approval
+const waitForApproval = async (ticketId: string, timeoutMs = 300000): Promise<ApprovalResponse> => {
+  return new Promise((resolve, reject) => {
+    const checkInterval = setInterval(() => {
+      const response = approvalResponses.get(ticketId);
+      if (response) {
+        clearInterval(checkInterval);
+        approvalResponses.delete(ticketId);
+        resolve(response);
+      }
+    }, 500);
+
+    setTimeout(() => {
+      clearInterval(checkInterval);
+      reject(new Error('Approval timeout'));
+    }, timeoutMs);
+  });
+};
 
 app.get('/', (c) => c.text('Cerebro Engine Running'));
 
@@ -82,6 +109,10 @@ app.post('/mesh/loop', async (c) => {
   const body = await c.req.json();
   const ticket = StateTicketSchema.parse(body);
   await saveStateTicket(ticket);
+
+  // Store workspace root for this ticket (from CLI or default to current working dir)
+  const workspaceRoot = (body as any).workspaceRoot || process.cwd();
+  ticketWorkspaceRoots.set(ticket.id, workspaceRoot);
 
   return streamSSE(c, async (stream) => {
     let orchestratorTokens = 0;
@@ -221,6 +252,103 @@ app.post('/mesh/loop', async (c) => {
             );
           }
 
+          // Extract file changes from agent outputs
+          const fileChanges: FileChange[] = [];
+
+          for (const [agent, output] of Object.entries(agentOutputs)) {
+            // Parse file paths from agent output format: "// FILE: path/to/file.ts\ncontent"
+            const fileMatches = output.matchAll(/\/\/ FILE: ([^\n]+)\n([\s\S]*?)(?=\n\/\/ FILE:|\n$|$)/g);
+
+            for (const match of fileMatches) {
+              const filePath = match[1].trim();
+              const content = match[2].trim();
+              const fullPath = path.join(workspaceRoot, filePath);
+              const exists = await fs.access(fullPath).then(() => true).catch(() => false);
+
+              fileChanges.push({
+                path: filePath,
+                content,
+                operation: exists ? 'update' : 'create',
+                isNew: !exists
+              });
+            }
+          }
+
+          // If there are file changes, request approval
+          if (fileChanges.length > 0) {
+            ticket.status = 'awaiting-approval';
+            await saveStateTicket(ticket);
+
+            await pushLog(`[Approval] Generated ${fileChanges.length} file change(s). Awaiting user approval...`, color.yellow);
+
+            // Send approval request via SSE
+            await stream.writeSSE({
+              event: 'approval_request',
+              data: JSON.stringify({
+                ticketId: ticket.id,
+                files: fileChanges,
+                summary: `Generated ${fileChanges.length} file(s) by ${Object.keys(agentOutputs).join(', ')} agents`
+              })
+            });
+
+            // Wait for user approval
+            let approval: ApprovalResponse;
+            try {
+              approval = await waitForApproval(ticket.id);
+            } catch (timeoutError) {
+              ticket.status = 'halted';
+              await saveStateTicket(ticket);
+              await pushLog(`[Approval] Timeout: No response within 5 minutes. Halting.`, color.red);
+              await stream.writeSSE({ event: 'error', data: JSON.stringify({ success: false, error: 'Approval timeout' }) });
+              return;
+            }
+
+            // Handle approval response
+            if (approval.approved) {
+              ticket.status = 'completed';
+              await saveStateTicket(ticket);
+
+              // Filter out rejected files
+              const filesToWrite = approval.rejectedFiles
+                ? fileChanges.filter(f => !approval.rejectedFiles!.includes(f.path))
+                : fileChanges;
+
+              await pushLog(`[Approval] Approved. Writing ${filesToWrite.length} file(s)...`, color.green);
+
+              // Write files
+              for (const fileChange of filesToWrite) {
+                const fullPath = path.join(workspaceRoot, fileChange.path);
+
+                if (fileChange.operation === 'delete') {
+                  await fs.unlink(fullPath);
+                  await pushLog(`[Files] Deleted: ${fileChange.path}`, color.dim);
+                } else {
+                  await fs.mkdir(path.dirname(fullPath), { recursive: true });
+                  await fs.writeFile(fullPath, fileChange.content, 'utf-8');
+                  await pushLog(`[Files] Written: ${fileChange.path}`, color.dim);
+                }
+              }
+
+              await pushLog(`[Files] All files written successfully.`, color.green);
+            } else {
+              ticket.status = 'failed';
+              ticket.error = approval.reason || 'User rejected changes';
+              await saveStateTicket(ticket);
+
+              await pushLog(`[Approval] Rejected: ${approval.reason || 'No reason provided'}`, color.red);
+              await stream.writeSSE({
+                event: 'error',
+                data: JSON.stringify({
+                  success: false,
+                  error: 'Changes rejected by user',
+                  reason: approval.reason,
+                  ticket
+                })
+              });
+              return;
+            }
+          }
+
           ticket.status = 'completed';
           ticket.context = { code: agentOutputs.backend || agentOutputs.ops || '', tests: agentOutputs.tester || '', outputs: agentOutputs };
           await saveStateTicket(ticket);
@@ -264,6 +392,18 @@ app.post('/mesh/loop', async (c) => {
       await stream.writeSSE({ event: 'error', data: JSON.stringify({ success: false, error: cleanErrorMessage(error?.message) }) });
     }
   });
+});
+
+// --- Approval Endpoint ---
+app.post('/mesh/approve', async (c) => {
+  try {
+    const body = await c.req.json();
+    const approval = ApprovalResponseSchema.parse(body);
+    approvalResponses.set(approval.ticketId, approval);
+    return c.json({ success: true, message: 'Approval recorded' });
+  } catch (error: any) {
+    return c.json({ success: false, error: error.message }, 400);
+  }
 });
 
 export default {
