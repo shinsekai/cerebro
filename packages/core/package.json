@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "main": "src/index.ts",
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "zod": "^3.22.4"
   }

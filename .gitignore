@@ -6,6 +6,9 @@ node_modules/
 # testing
 coverage/
 
+# cerebro cli
+./apps/cli/cerebro
+
 # framework
 .next/
 out/
