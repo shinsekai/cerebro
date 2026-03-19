@@ -8,8 +8,8 @@ Cerebro bridges the gap between local development workflows and cloud infrastruc
 
 Cerebro runs heavily decoupled across a **2-Tier AI Mesh Architecture**:
 
-1. **Tier 1 (The Orchestrator)**: Uses Anthropic Claude 3 Opus (via Google Cloud Vertex AI) to parse CLI `develop` intents into strictly constrained, hyper-focused JSON execution plans.
-2. **Tier 2 (The Specialized Mesh)**: Uses highly precise Claude 3 Sonnet agents acting entirely asynchronously in a strict verification loop:
+1. **Tier 1 (The Orchestrator)**: Uses Anthropic Claude 4.6 Opus to parse CLI `develop` intents into strictly constrained, hyper-focused JSON execution plans.
+2. **Tier 2 (The Specialized Mesh)**: Uses highly precise Claude 4.6 Sonnet agents acting entirely asynchronously in a strict verification loop:
    - **Backend Agent**
    - **Frontend Agent**
    - **Quality Assurance Agent**
@@ -45,7 +45,7 @@ graph TD
 - **Engine API Core:** Hono (`v4.x`, port `8080`)
 - **CLI Interface:** Clack Prompts & Picocolors (`v1.1.x`)
 - **Database & Persistence:** PostgreSQL (latest) with `pgvector` for advanced semantic embeddings
-- **AI Integration Framework:** LangChain Core (`v1.1.x`) targeting `@langchain/google-vertexai`
+- **AI Integration Framework:** LangChain Core (`v1.1.x`) targeting `@langchain/anthropic`
 
 ---
 
@@ -60,7 +60,7 @@ The easiest way to orchestrate the Cerebro environment is by utilizing the built
    ```
 
 2. **Boot the AI Engine Server:**
-   This runs the Hono mesh execution endpoints natively via Bun. Ensure you have the Anthropic Vertex AI credentials configured globally (e.g., `gcloud auth application-default login`) and `ANTHROPIC_VERTEX_PROJECT_ID` set.
+   This runs the Hono mesh execution endpoints natively via Bun. Ensure you have the Anthropic API credentials configured and `ANTHROPIC_API_KEY` set.
    ```bash
    make dev-engine
    ```

@@ -1,17 +1,14 @@
-import { ChatVertexAI } from "@langchain/google-vertexai";
+import { ChatAnthropic } from "@langchain/anthropic";
 import { PromptTemplate } from "@langchain/core/prompts";
 
 export class OrchestratorAgent {
-  private model: ChatVertexAI;
+  private model: ChatAnthropic;
 
   constructor() {
-    this.model = new ChatVertexAI({
-      model: process.env.ANTHROPIC_MODEL || "claude-3-opus@20240229",
+    this.model = new ChatAnthropic({
+      model: process.env.ANTHROPIC_MODEL || "claude-opus-4-6",
       temperature: 0,
-      authOptions: {
-        projectId: process.env.ANTHROPIC_VERTEX_PROJECT_ID,
-      },
-      location: "europe-west1"
+      apiKey: process.env.ANTHROPIC_API_KEY || "not_provided",
     });
   }
 

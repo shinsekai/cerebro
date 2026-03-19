@@ -17,7 +17,7 @@ This file provides crucial architectural context, rules, and ecosystem mandates 
 
 ## 2. Strict Technical Conventions
 
-- **LangChain & Vertex AI Focus:** `ChatVertexAI` from `@langchain/google-vertexai` is explicitly relied on over raw Anthropic endpoints. Do NOT use `@langchain/anthropic` natively as we prioritize seamless Google SDK Application Default Credentials matching `process.env.ANTHROPIC_VERTEX_PROJECT_ID` and `process.env.ANTHROPIC_MODEL`.
+- **LangChain & Anthropic Focus:** `ChatAnthropic` from `@langchain/anthropic` is explicitly relied on over Vertex AI integrations. Do NOT use `@langchain/google-vertexai` as we prioritize standard Anthropic API keys matching `process.env.ANTHROPIC_API_KEY` and `process.env.ANTHROPIC_MODEL`.
 - **Picocolors over Chalk:** The CLI strictly uses the lightweight `picocolors` package for decorating terminal output.
 - **Circuit Breaker Design:** The system universally relies on `@cerebro/core`'s native `CircuitBreaker`. All LLM mesh invocations iterating inside Hono routes *must* execute within the `while(CircuitBreaker.check(ticket))` boundary to gracefully trap execution cascades before spiraling infinitely.
 

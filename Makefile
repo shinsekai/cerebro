@@ -25,15 +25,19 @@ install:
 
 db-up:
 	docker compose up -d
+	@echo "Waiting for database to be ready..."
+	@until docker exec cerebro-postgres-1 pg_isready -U cerebro; do sleep 1; done
+	@echo "Executing schema.sql..."
+	docker exec -i cerebro-postgres-1 psql -U cerebro -d cerebro < packages/database/schema.sql
 
 db-down:
 	docker compose down
 
 dev-engine:
-	cd apps/engine && bun run dev
+	cd apps/engine && bun --hot src/index.ts
 
 dev-cli:
-	cd apps/cli && bun run dev
+	cd apps/cli && bun src/index.ts
 
 build:
 	bun run build
