@@ -21,3 +21,30 @@ export const MemoryTicketSchema = z.object({
 });
 
 export type MemoryTicket = z.infer<typeof MemoryTicketSchema>;
+
+// --- Mesh Execution Plan Schema ---
+export const AgentTypeSchema = z.enum([
+  'frontend',
+  'backend',
+  'quality',
+  'security',
+  'tester',
+  'ops'
+]);
+
+export type AgentType = z.infer<typeof AgentTypeSchema>;
+
+export const AgentStepSchema = z.object({
+  agent: AgentTypeSchema,
+  description: z.string(),
+  depends_on: z.array(AgentTypeSchema).default([])
+});
+
+export type AgentStep = z.infer<typeof AgentStepSchema>;
+
+export const ExecutionPlanSchema = z.object({
+  summary: z.string(),
+  steps: z.array(AgentStepSchema)
+});
+
+export type ExecutionPlan = z.infer<typeof ExecutionPlanSchema>;
