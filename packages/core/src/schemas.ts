@@ -4,7 +4,7 @@ export const StateTicketSchema = z.object({
   id: z.string().uuid(),
   task: z.string(),
   retry_count: z.number().int().min(0).max(3),
-  status: z.enum(['pending', 'in-progress', 'completed', 'failed', 'halted']),
+  status: z.enum(['pending', 'in-progress', 'awaiting-approval', 'completed', 'failed', 'halted']),
   context: z.record(z.any()).optional(),
   error: z.string().optional()
 });
@@ -48,3 +48,23 @@ export const ExecutionPlanSchema = z.object({
 });
 
 export type ExecutionPlan = z.infer<typeof ExecutionPlanSchema>;
+
+// --- File Changes and Approval Schemas ---
+
+export const FileChangeSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  operation: z.enum(['create', 'update', 'delete']),
+  isNew: z.boolean().default(true)
+});
+
+export type FileChange = z.infer<typeof FileChangeSchema>;
+
+export const ApprovalResponseSchema = z.object({
+  ticketId: z.string().uuid(),
+  approved: z.boolean(),
+  rejectedFiles: z.array(z.string()).optional(),
+  reason: z.string().optional()
+});
+
+export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>;

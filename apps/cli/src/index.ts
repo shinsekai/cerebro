@@ -1,7 +1,10 @@
-import { intro, outro, select, text, isCancel, spinner } from '@clack/prompts';
+import { intro, outro, select, text, confirm, multiselect, isCancel, spinner } from '@clack/prompts';
 import color from 'picocolors';
 import { parseArgs } from 'util';
 import { randomUUID } from 'crypto';
+import { cwd, chdir } from 'process';
+import path from 'path';
+import fs from 'fs/promises';
 
 const { positionals, values } = parseArgs({
   args: process.argv.slice(2),
@@ -88,7 +91,8 @@ async function main() {
           id: randomUUID(),
           task: taskDesc,
           retry_count: 0,
-          status: 'pending'
+          status: 'pending',
+          workspaceRoot: cwd()
         };
         const res = await fetch('http://localhost:8080/mesh/loop', {
           method: 'POST',
@@ -136,6 +140,110 @@ async function main() {
                       // Malformed final payload — surface as a stream error
                       finalData = { success: false, error: 'Malformed response from Engine.' };
                     }
+                  } else if (currentEvent === 'approval_request') {
+                    // Handle approval request
+                    try {
+                      const approvalData = JSON.parse(fullData);
+                      s.stop(color.yellow(`⏸ Paused: Awaiting file approval...`));
+
+                      // Display file changes
+                      console.log(color.bold(`\n${approvalData.summary}\n`));
+
+                      for (const file of approvalData.files) {
+                        const operationIcon = file.operation === 'create' ? color.green('+') :
+                                             file.operation === 'delete' ? color.red('-') :
+                                             color.yellow('~');
+
+                        console.log(`${operationIcon} ${color.cyan(file.path)}`);
+                        console.log(color.dim(`  ${file.operation} ${file.content.length} characters`));
+                        console.log(color.dim('─'.repeat(50)));
+
+                        // Display file content preview
+                        const lines = file.content.split('\n');
+                        if (lines.length > 20) {
+                          console.log(color.gray(lines.slice(0, 20).join('\n')));
+                          console.log(color.dim(`... (${lines.length - 20} more lines)`));
+                        } else {
+                          console.log(color.gray(lines.join('\n')));
+                        }
+                        console.log(color.dim('─'.repeat(50) + '\n'));
+                      }
+
+                      // Ask user for approval
+                      const approved = await confirm({
+                        message: 'Approve these file changes?',
+                        initialValue: true
+                      });
+
+                      if (isCancel(approved)) {
+                        console.log(color.red('\n✖ Approval cancelled'));
+                        process.exit(0);
+                      }
+
+                      let rejectedFiles: string[] = [];
+
+                      if (approved) {
+                        // Allow selective approval
+                        const selectiveApproval = await confirm({
+                          message: 'Reject specific files?',
+                          initialValue: false
+                        });
+
+                        if (selectiveApproval && !isCancel(selectiveApproval)) {
+                          rejectedFiles = await multiselect({
+                            message: 'Select files to reject (use space to select)',
+                            options: approvalData.files.map((f: any) => ({
+                              value: f.path,
+                              label: f.path
+                            })),
+                            required: false
+                          }) as string[];
+
+                          if (isCancel(rejectedFiles)) {
+                            rejectedFiles = [];
+                          }
+                        }
+                      }
+
+                      const approvalResponse: any = {
+                        ticketId: approvalData.ticketId,
+                        approved: !!approved,
+                        rejectedFiles: rejectedFiles.length > 0 ? rejectedFiles : undefined
+                      };
+
+                      if (!approved) {
+                        approvalResponse.reason = await text({
+                          message: 'Reason for rejection:',
+                          placeholder: 'e.g., incorrect implementation',
+                          validate: (value) => {
+                            if (!value) return 'Please provide a reason for rejection.';
+                          }
+                        });
+
+                        if (isCancel(approvalResponse.reason)) {
+                          console.log(color.red('\n✖ Approval cancelled'));
+                          process.exit(0);
+                        }
+                      }
+
+                      // Send approval response to engine
+                      const res = await fetch('http://localhost:8080/mesh/approve', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(approvalResponse)
+                      });
+
+                      if (!res.ok) {
+                        console.error(color.red('Failed to send approval response'));
+                        process.exit(1);
+                      }
+
+                      // Resume spinner
+                      s.start(`Processing ${approved ? 'approved' : 'rejected'} changes...`);
+                    } catch (error) {
+                      console.error(color.red('Error processing approval request:'), error);
+                      process.exit(1);
+                    }
                   } else {
                     const safeData = fullData.replace(/\r?\n|\r/g, ' ').trim();
                     if (safeData.length > 0) {
@@ -158,14 +266,15 @@ async function main() {
           if (finalData.usage) {
              const u = finalData.usage;
              console.log(color.cyan(`\n📊 Token Consumption:`));
-             console.log(`  Orchestrator : ${color.yellow(u.orchestrator)} tokens`);
-             console.log(`  Frontend     : ${color.yellow(u.frontend)} tokens`);
-             console.log(`  Backend      : ${color.yellow(u.backend)} tokens`);
-             console.log(`  Quality      : ${color.yellow(u.quality)} tokens`);
-             console.log(`  Security     : ${color.yellow(u.security)} tokens`);
-             console.log(`  Tester       : ${color.yellow(u.tester)} tokens`);
+             console.log(`  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`);
+             console.log(`  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`);
+             console.log(`  Backend      : ${color.yellow(u.backend?.tokens)} tokens`);
+             console.log(`  Quality      : ${color.yellow(u.quality?.tokens)} tokens`);
+             console.log(`  Security     : ${color.yellow(u.security?.tokens)} tokens`);
+             console.log(`  Tester       : ${color.yellow(u.tester?.tokens)} tokens`);
+             console.log(`  Ops          : ${color.yellow(u.ops?.tokens)} tokens`);
              console.log(color.dim(`  -----------------------`));
-             console.log(`  Total        : ${color.magenta(u.total)} tokens\n`);
+             console.log(`  Total        : ${color.magenta(u.total?.tokens)} tokens\n`);
           }
         } else if (finalData) {
           s.stop(color.red(`✖ Failed: ${finalData.error}`));
