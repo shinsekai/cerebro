@@ -5,6 +5,8 @@
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
+    "test": "turbo test",
+    "test:watch": "turbo test --watch",
     "lint": "biome check .",
     "format": "biome format --write ."
   },
