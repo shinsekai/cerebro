@@ -111,9 +111,10 @@ When contributing code to any portion of the Cerebro monorepo, AI coding assista
    - Prioritize zero-dependency or lightweight solutions. Do not add bloated NPM libraries (like Moment.js or Lodash) if native JavaScript/TypeScript methods or native Bun APIs suffice.
    - Hono endpoints in `apps/engine` must remain completely stateless regarding LLM execution context. Rely entirely on PostgreSQL (`pgvector`) for state persistence.
 
-4. **Framework Agnosticism in Prompts**
+4. **Framework Agnosticism in Prompts and Tooling**
    - When refining Tier 2 Sub-Agents, do not hardcode rigid technology stacks (e.g., "Use Next.js", "Use Tailwind") into the prompt unless strictly instructed by the user. Agents should intuitively infer context from the user's workspace parameters sent natively by the Tier 1 Orchestrator.
    - Base templates in `packages/agents/src/tier2/agents.ts` should remain universally applicable to any frontend or backend language.
+   - **Tool executor allowed commands must be cross-ecosystem.** The `ToolExecutor`'s default command allowlist must cover JS/TS, Python, Go, Rust, and DevOps tools — not just Node/Bun binaries. Agent verification steps (e.g., "run tests", "run linter") must adapt to the detected tech stack rather than hardcoding `bun test` or `biome check`.
 
 5. **Human-In-The-Loop (HITL) Mandate**
    - While Cerebro handles autonomous coding, testing, and reviewing, final deployments or primary branch merges MUST require human oversight and explicit CLI sign-off. Do not bypass or mock this layer.
@@ -283,6 +284,21 @@ const timeoutPromise = new Promise((_, reject) =>
 );
 const exitCode = await Promise.race([proc.exited, timeoutPromise]);
 ```
+
+### Tool Executor — Allowed Commands
+
+The `ToolExecutor` restricts which shell commands agents can run. The default allowlist must be **framework-agnostic**, covering all supported ecosystems:
+
+| Category | Commands |
+|----------|----------|
+| **JS/TS** | `bun`, `npm`, `npx`, `bunx`, `node`, `tsc`, `biome`, `vitest`, `jest` |
+| **Python** | `python`, `python3`, `pip`, `pytest`, `ruff`, `mypy`, `uvicorn` |
+| **Go** | `go` |
+| **Rust** | `cargo`, `rustc` |
+| **DevOps** | `docker`, `git`, `make`, `cmake` |
+| **Unix** | `cat`, `ls`, `find`, `grep`, `head`, `tail`, `wc`, `echo`, `pwd`, `which`, `env` |
+
+Additionally, `ToolExecutor.detectProjectCommands(workspaceRoot)` scans `package.json` scripts, `pyproject.toml` scripts, `Makefile` targets, and `Cargo.toml` to dynamically add project-specific commands at runtime.
 
 ### Path Traversal Prevention
 
