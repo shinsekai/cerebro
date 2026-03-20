@@ -26,6 +26,10 @@ import {
   securityAgent,
   opsAgent,
 } from "@cerebro/agents";
+import {
+  buildWorkspaceContext,
+  formatContextForPrompt,
+} from "@cerebro/workspace";
 import path from "path";
 import fs from "fs/promises";
 
@@ -192,6 +196,26 @@ app.post("/mesh/loop", async (c) => {
       );
       await pushLog(`Task: "${ticket.task}"`, color.bold);
 
+      // Build workspace context for agent awareness
+      let contextString = "";
+      try {
+        const wsContext = await buildWorkspaceContext(
+          workspaceRoot,
+          ticket.task,
+        );
+        contextString = formatContextForPrompt(wsContext);
+        await pushLog(
+          `[Context] Workspace scanned: ${wsContext.profile.framework} / ${wsContext.profile.language}`,
+          color.cyan,
+        );
+      } catch (scanError: any) {
+        await pushLog(
+          `[Context] Workspace scan failed: ${scanError.message}. Agents will work with empty context.`,
+          color.yellow,
+        );
+        contextString = "";
+      }
+
       const orchestrator = new OrchestratorAgent();
       await pushLog(
         `[Tier 1 Orchestrator] Analyzing request and planning constraints...`,
@@ -288,7 +312,10 @@ app.post("/mesh/loop", async (c) => {
                   .join("\n");
             }
 
-            const result: any = await agentInstance.invoke({ context });
+            const result: any = await agentInstance.invoke({
+              context,
+              workspaceContext: contextString,
+            });
             const tokenDetails = extractTokenDetails(result);
             agentOutputs[agent] = String(result.content);
 

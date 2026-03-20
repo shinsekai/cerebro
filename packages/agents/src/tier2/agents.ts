@@ -6,6 +6,8 @@ const model = getTier2Model();
 export const createAgentFlow = (roleDescription: string) => {
   // Returns a Runnable sequence that can be invoked across the Mesh loop.
   return PromptTemplate.fromTemplate(`
+    {workspaceContext}
+
     ${roleDescription}
 
     You are operating within Cerebro, an enterprise AI codebase orchestration platform.

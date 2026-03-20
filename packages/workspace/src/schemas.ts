@@ -82,3 +82,19 @@ export const WorkspaceProfileSchema = z.object({
   dependencies: z.array(z.string()),
 });
 export type WorkspaceProfile = z.infer<typeof WorkspaceProfileSchema>;
+
+export const RelevantFileSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  score: z.number(),
+  truncated: z.boolean(),
+});
+export type RelevantFile = z.infer<typeof RelevantFileSchema>;
+
+export const WorkspaceContextSchema = z.object({
+  profile: WorkspaceProfileSchema,
+  directoryTree: z.string(),
+  relevantFiles: z.array(RelevantFileSchema),
+  conventions: z.string().optional(),
+});
+export type WorkspaceContext = z.infer<typeof WorkspaceContextSchema>;
