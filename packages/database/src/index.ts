@@ -21,5 +21,5 @@ export async function checkConnection() {
   }
 }
 
-export { sql };
 export * from "./queries.js";
+export { sql };

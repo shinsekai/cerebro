@@ -48,13 +48,22 @@ async function detectConventions(rootPath: string): Promise<string> {
   return conventions.join("\n");
 }
 
+export interface BuildWorkspaceContextOptions {
+  useSemanticSearch?: boolean;
+}
+
 export async function buildWorkspaceContext(
   rootPath: string,
   taskDescription: string,
+  options?: BuildWorkspaceContextOptions,
 ): Promise<WorkspaceContext> {
   const profile = await scanWorkspace(rootPath);
   const directoryTree = await buildDirectoryTree(rootPath);
-  const relevantFiles = await selectRelevantFiles(rootPath, taskDescription);
+  const relevantFiles = await selectRelevantFiles(
+    rootPath,
+    taskDescription,
+    options,
+  );
   const conventions = await detectConventions(rootPath);
 
   const context: WorkspaceContext = {
