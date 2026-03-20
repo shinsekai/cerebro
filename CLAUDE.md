@@ -177,3 +177,136 @@ Required environment variables (set in `apps/engine/.env` or system environment)
 - `POSTGRES_DB`: Database name (default: `cerebro`)
 - `POSTGRES_USER`: Database user (default: `cerebro`)
 - `POSTGRES_PASSWORD`: Database password (default: `cerebro_password`)
+
+## 8. Codebase Reference — Patterns & Conventions
+
+### Monorepo Wiring
+
+When creating a new package (e.g., `packages/workspace`), follow this exact pattern:
+
+**package.json** — use `"workspace:*"` for internal dependencies:
+```json
+{
+  "name": "@cerebro/workspace",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "test": "bun test" },
+  "dependencies": {
+    "@cerebro/core": "workspace:*",
+    "zod": "^3.22.4"
+  }
+}
+```
+
+**tsconfig.json** — extend root config:
+```json
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "outDir": "./dist", "declaration": true },
+  "include": ["src/**/*"]
+}
+```
+
+Root `package.json` already has `"workspaces": ["apps/*", "packages/*"]` — any new directory under `packages/` is auto-discovered. Run `bun install` after creating.
+
+To consume a new package from another workspace (e.g., `apps/engine`), add to its `package.json`:
+```json
+"@cerebro/workspace": "workspace:*"
+```
+Then run `bun install`.
+
+### Test Patterns
+
+All tests use `bun:test`. **Never** use `vitest`, `jest`, or `@jest/globals`.
+
+```typescript
+import { describe, it, expect } from 'bun:test';
+import { MySchema } from './myModule.js';
+
+describe('MyModule', () => {
+  it('should do something', () => {
+    const result = MySchema.parse(validInput);
+    expect(result).toEqual(expectedOutput);
+  });
+
+  it('should reject invalid input', () => {
+    expect(() => MySchema.parse(invalidInput)).toThrow();
+  });
+});
+```
+
+Key rules:
+- Import from `'bun:test'`, never from `'vitest'` or `'@jest/globals'`
+- Use `.js` extension in all imports (ESM resolution)
+- Async tests: `it('...', async () => { ... })`
+- Temp directories: `import { mkdtemp, rm } from 'fs/promises'; import { tmpdir } from 'os';`
+- Run tests with: `bun test` (not `bunx vitest` or `npx jest`)
+- Use `beforeEach` / `afterEach` for setup/teardown
+- **Do NOT use** `jest.mock()`, `jest.fn()`, or `jest.spyOn()` — they do not exist in `bun:test`
+- For mocking, use `mock.module()` from `bun:test`, or inject mock objects via function parameters (preferred)
+
+### Import Conventions
+
+```typescript
+// Always use .js extension for local imports (ESM):
+import { MyType } from './myModule.js';
+
+// Cross-package:
+import { StateTicket, FileChange } from '@cerebro/core';
+
+// Node built-ins:
+import fs from 'fs/promises';
+import path from 'path';
+```
+
+### Bun Subprocess Execution
+
+Use `Bun.spawn` (not `child_process.exec`) for running shell commands:
+
+```typescript
+const proc = Bun.spawn(["bun", "test"], {
+  cwd: workspaceRoot,
+  stdout: "pipe",
+  stderr: "pipe",
+  env: { ...process.env },
+});
+
+// Read output:
+const stdout = await new Response(proc.stdout).text();
+const stderr = await new Response(proc.stderr).text();
+const exitCode = await proc.exited; // returns a number
+
+// For timeout, race against a timer:
+const timeoutPromise = new Promise((_, reject) =>
+  setTimeout(() => { proc.kill(); reject(new Error('timeout')); }, 30000)
+);
+const exitCode = await Promise.race([proc.exited, timeoutPromise]);
+```
+
+### Path Traversal Prevention
+
+All file operations that accept user or agent input must validate paths:
+
+```typescript
+private resolveSafePath(relativePath: string): string | null {
+  const resolved = path.resolve(this.workspaceRoot, relativePath);
+  if (!resolved.startsWith(this.workspaceRoot)) {
+    return null; // Path traversal attempted
+  }
+  return resolved;
+}
+```
+
+### File Layout Quick Reference
+
+| Path | Purpose |
+|------|---------|
+| `packages/core/src/schemas.ts` | Zod schemas and types (`StateTicket`, `ExecutionPlan`, `FileChange`, etc.) |
+| `packages/core/src/circuitBreaker.ts` | `CircuitBreaker` class for retry safety |
+| `packages/agents/src/orchestrator.ts` | `OrchestratorAgent` class (Tier 1, Opus) |
+| `packages/agents/src/tier2/base.ts` | `getTier2Model()` factory (Tier 2, Sonnet) |
+| `packages/agents/src/tier2/agents.ts` | `createAgentFlow` + all 6 agent exports |
+| `packages/database/src/queries.ts` | SQL query functions using `postgres` template literals |
+| `apps/engine/src/index.ts` | Hono server with `/mesh/loop` SSE endpoint |
+| `apps/cli/src/index.ts` | Interactive CLI with `@clack/prompts` |
