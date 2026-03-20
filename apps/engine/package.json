@@ -9,6 +9,7 @@
     "@cerebro/agents": "workspace:*",
     "@cerebro/core": "workspace:*",
     "@cerebro/database": "workspace:*",
+    "@cerebro/workspace": "workspace:*",
     "dotenv": "^17.3.1",
     "hono": "^4.1.0",
     "picocolors": "^1.1.1"
