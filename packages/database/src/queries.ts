@@ -1,5 +1,5 @@
+import type { MemoryTicket, StateTicket } from "@cerebro/core";
 import { sql } from "./index.js";
-import type { StateTicket, MemoryTicket } from "@cerebro/core";
 
 export async function saveStateTicket(ticket: StateTicket) {
   return await sql`
@@ -56,4 +56,56 @@ export async function searchSimilarMemory(
     ORDER BY embedding <=> ${vectorStr}::vector
     LIMIT ${limit}
   `;
+}
+
+export interface WorkspaceFileRecord {
+  id: string;
+  workspace_root: string;
+  file_path: string;
+  file_summary: string;
+  embedding: number[] | null;
+  indexed_at: Date;
+}
+
+export async function saveWorkspaceFile(
+  workspaceRoot: string,
+  filePath: string,
+  summary: string,
+  embedding: number[],
+): Promise<void> {
+  const vectorStr = `[${embedding.join(",")}]`;
+  await sql`
+    INSERT INTO workspace_files (workspace_root, file_path, file_summary, embedding)
+    VALUES (${workspaceRoot}, ${filePath}, ${summary}, ${vectorStr}::vector)
+    ON CONFLICT (workspace_root, file_path) DO UPDATE SET
+      file_summary = EXCLUDED.file_summary,
+      embedding = EXCLUDED.embedding,
+      indexed_at = CURRENT_TIMESTAMP
+  `;
+}
+
+export async function searchWorkspaceFiles(
+  workspaceRoot: string,
+  queryEmbedding: number[],
+  limit = 10,
+  threshold = 0.6,
+): Promise<{ path: string; score: number }[]> {
+  const vectorStr = `[${queryEmbedding.join(",")}]`;
+  const results = await sql<{ file_path: string; similarity: number }[]>`
+    SELECT
+      file_path,
+      1 - (embedding <=> ${vectorStr}::vector) as similarity
+    FROM workspace_files
+    WHERE workspace_root = ${workspaceRoot}
+      AND 1 - (embedding <=> ${vectorStr}::vector) > ${threshold}
+    ORDER BY embedding <=> ${vectorStr}::vector
+    LIMIT ${limit}
+  `;
+  return results.map((r) => ({ path: r.file_path, score: r.similarity }));
+}
+
+export async function deleteWorkspaceIndex(
+  workspaceRoot: string,
+): Promise<void> {
+  await sql`DELETE FROM workspace_files WHERE workspace_root = ${workspaceRoot}`;
 }

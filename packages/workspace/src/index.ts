@@ -1,4 +1,17 @@
+export type { BuildWorkspaceContextOptions } from "./context.js";
 export { buildWorkspaceContext } from "./context.js";
+export type {
+  IndexWorkspaceResult,
+  SemanticSearchResult,
+} from "./embeddings.js";
+export {
+  clearWorkspaceIndex,
+  embedText,
+  generateFileSummary,
+  indexWorkspace,
+  mergeSearchResults,
+  semanticSearch,
+} from "./embeddings.js";
 export type { FileSelectorOptions, RelevantFile } from "./fileSelector.js";
 export {
   FileSelectorOptionsSchema,

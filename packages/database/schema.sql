@@ -20,3 +20,13 @@ CREATE TABLE IF NOT EXISTS memory_tickets (
   embedding vector(768),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS workspace_files (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_root TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  file_summary TEXT NOT NULL,
+  embedding vector(1024),
+  indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(workspace_root, file_path)
+);

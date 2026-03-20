@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { mergeSearchResults, semanticSearch } from "./embeddings.js";
 
 export const RelevantFileSchema = z.object({
   path: z.string(),
@@ -16,6 +17,7 @@ export const FileSelectorOptionsSchema = z.object({
   maxTotalTokens: z.number().min(1).optional().default(30000),
   includePatterns: z.array(z.string()).optional().default([]),
   excludePatterns: z.array(z.string()).optional().default([]),
+  useSemanticSearch: z.boolean().optional().default(false),
 });
 
 export type FileSelectorOptions = z.infer<typeof FileSelectorOptionsSchema>;
@@ -326,6 +328,7 @@ export async function selectRelevantFiles(
     maxTotalTokens: 30000,
     includePatterns: [],
     excludePatterns: [],
+    useSemanticSearch: false,
     ...options,
   });
 
@@ -383,21 +386,75 @@ export async function selectRelevantFiles(
 
   filesToScore.sort((a, b) => b.score - a.score);
 
-  const topFiles = filesToScore.slice(0, opts.maxFiles);
+  // Take more candidates when using semantic search, to allow for merging
+  const candidateCount = opts.useSemanticSearch
+    ? Math.max(opts.maxFiles * 2, 30)
+    : opts.maxFiles;
+
+  const topFiles = filesToScore.slice(0, candidateCount);
+
+  // Build initial results with heuristic scores
+  const heuristicResults: RelevantFile[] = topFiles.map(
+    ({ relativePath, fullPath: _fullPath, score }) => ({
+      path: relativePath,
+      content: "", // Will be filled later
+      score,
+      truncated: false,
+    }),
+  );
+
+  // Apply semantic search if enabled
+  let finalFilesToProcess: RelevantFile[];
+  if (opts.useSemanticSearch) {
+    try {
+      const semanticResults = await semanticSearch(
+        rootPath,
+        taskDescription,
+        opts.maxFiles * 2,
+      );
+      finalFilesToProcess = mergeSearchResults(
+        heuristicResults,
+        semanticResults,
+      );
+    } catch {
+      // If semantic search fails, fall back to heuristic only
+      console.warn(
+        "[workspace] Semantic search unavailable, using heuristic only",
+      );
+      finalFilesToProcess = heuristicResults;
+    }
+  } else {
+    finalFilesToProcess = heuristicResults;
+  }
+
+  // Sort and limit
+  finalFilesToProcess.sort((a, b) => b.score - a.score);
+  const filesToProcess = finalFilesToProcess.slice(0, opts.maxFiles);
+
+  // Build path to fullpath mapping for reading content
+  const pathToFullPath = new Map<string, string>();
+  for (const { relativePath, fullPath } of topFiles) {
+    pathToFullPath.set(relativePath, fullPath);
+  }
 
   const results: RelevantFile[] = [];
   let remainingTokens = opts.maxTotalTokens;
 
-  for (const { relativePath, fullPath, score } of topFiles) {
+  for (const file of filesToProcess) {
+    const fullPath = pathToFullPath.get(file.path);
+    if (!fullPath) {
+      continue;
+    }
+
     try {
       const content = await fs.readFile(fullPath, "utf-8");
       const estimatedTokens = Math.ceil(content.length / 4);
 
       if (estimatedTokens <= remainingTokens) {
         results.push({
-          path: relativePath,
+          path: file.path,
           content,
-          score,
+          score: file.score,
           truncated: false,
         });
         remainingTokens -= estimatedTokens;
@@ -405,9 +462,9 @@ export async function selectRelevantFiles(
         const allowedChars = remainingTokens * 4;
         const truncatedContent = content.slice(0, allowedChars);
         results.push({
-          path: relativePath,
+          path: file.path,
           content: truncatedContent,
-          score,
+          score: file.score,
           truncated: true,
         });
         remainingTokens = 0;
