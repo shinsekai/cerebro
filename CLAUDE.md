@@ -10,28 +10,92 @@ This file provides crucial architectural context, rules, and ecosystem mandates 
    - Standalone CLI inputs live seamlessly in `apps/cli`.
    - Core LLM bindings and templates live natively in `packages/agents`.
    - All state schemas are strongly typed and shared in `@cerebro/core`.
+   - Database queries and persistence logic are isolated in `@cerebro/database`.
 
 2. **Mesh Orchestrator Pattern**
    - The engine utilizes a **decentralized event loop** on the `POST /mesh/loop` endpoint exposed by Hono.
    - It leverages powerful `Server-Sent Events (SSE)` using Hono's `streamSSE` to chunk console status texts and LLM iteration traces actively to the CLI.
+   - **Dynamic Agent Dispatch**: The Orchestrator generates an `ExecutionPlan` with steps and dependencies, allowing agents to execute in parallel when possible and sequentially when required.
+
+3. **Human-In-The-Loop (HITL) Approval System**
+   - The system implements a robust approval workflow that pauses execution before writing files.
+   - Users can review all proposed file changes with operation indicators (create, update, delete).
+   - **Selective File Approval**: Users can approve the overall change set but reject specific files.
+   - Approval is sent via `POST /mesh/approve` endpoint with optional `rejectedFiles` array.
+   - 5-minute timeout safeguard prevents indefinite hanging.
+
+4. **Token Tracking & Cost Analytics**
+   - Per-agent token consumption is tracked in real-time (input/output/total tokens).
+   - Cost calculation using 2025 pricing models for Claude 4.6 family (Opus, Sonnet, Haiku).
+   - Final summary displays breakdown by agent type and total expenditure.
+   - Model pricing configuration is centralized and extensible.
 
 ## 2. Strict Technical Conventions
 
 - **LangChain & Anthropic Focus:** `ChatAnthropic` from `@langchain/anthropic` is explicitly relied on over Vertex AI integrations. Do NOT use `@langchain/google-vertexai` as we prioritize standard Anthropic API keys matching `process.env.ANTHROPIC_API_KEY` and `process.env.ANTHROPIC_MODEL`.
 - **Picocolors over Chalk:** The CLI strictly uses the lightweight `picocolors` package for decorating terminal output.
 - **Circuit Breaker Design:** The system universally relies on `@cerebro/core`'s native `CircuitBreaker`. All LLM mesh invocations iterating inside Hono routes *must* execute within the `while(CircuitBreaker.check(ticket))` boundary to gracefully trap execution cascades before spiraling infinitely.
+- **Biome for Code Quality:** Use Biome for both formatting and linting. The project enforces Biome's recommended ruleset. Run `bun run format` and `bun run lint` before committing.
+- **Postgres SQL Library:** Database interactions use the `postgres` npm package (not `pg` or `node-postgres`). Queries are template-literal style with auto-camelCase transformation.
 
-## 3. Extending Agent Workflows
+## 3. Core Schemas & Data Structures
+
+### State Ticket Schema
+```typescript
+{
+  id: string;              // UUID identifier
+  task: string;            // User's request description
+  retry_count: number;      // 0-3, enforced by CircuitBreaker
+  status: enum;           // pending | in-progress | awaiting-approval | completed | failed | halted
+  context?: Record<any>;    // Agent outputs, metadata
+  error?: string;          // Error message if failed
+}
+```
+
+### Execution Plan Schema
+```typescript
+{
+  summary: string;         // Human-readable plan description
+  steps: [{
+    agent: enum;          // frontend | backend | quality | security | tester | ops
+    description: string;   // What this agent will do
+    depends_on: enum[]    // Agent types that must complete first
+  }]
+}
+```
+
+### File Change Schema
+```typescript
+{
+  path: string;           // Relative path to file
+  content: string;        // File contents
+  operation: enum;       // create | update | delete
+  isNew: boolean;        // Whether file exists in workspace
+}
+```
+
+### Approval Response Schema
+```typescript
+{
+  ticketId: string;       // Correlates with original request
+  approved: boolean;      // Overall approval decision
+  rejectedFiles?: string[]; // Paths of files to skip
+  reason?: string;        // Reason if rejected
+}
+```
+
+## 4. Extending Agent Workflows
 
 If requested to create a new **Tier 2 Agent** to process another facet of software architecture:
 1. Initialize a descriptive base template in `packages/agents/src/tier2/agents.ts`.
 2. Wrap it with `createAgentFlow(<prompt>)`.
 3. Add a dedicated `SYSTEM ROLE` and explicit `RESPONSIBILITIES`. Focus heavily on extreme isolation, DRY, and KISS principles.
 4. Export the newly created agent to `packages/agents/src/index.ts`.
-5. Inject the agent exclusively into the master Mesh router execution pipeline located safely inside `apps/engine/src/index.ts`. 
-6. Ensure to actively map its token footprint output via `extractTokens(res)` and append it to the HTTP SSE metric chunk.
+5. Inject the agent exclusively into the master Mesh router execution pipeline located safely inside `apps/engine/src/index.ts`.
+6. Ensure to actively map its token footprint output via `extractTokenDetails(res)` and append it to the HTTP SSE metric chunk.
+7. Add the agent type to `AgentTypeSchema` in `@cerebro/core/src/schemas.ts`.
 
-## 4. Cerebro Engineering Best Practices
+## 5. Cerebro Engineering Best Practices
 
 When contributing code to any portion of the Cerebro monorepo, AI coding assistants must rigorously adhere to the following principles:
 
@@ -48,8 +112,68 @@ When contributing code to any portion of the Cerebro monorepo, AI coding assista
    - Hono endpoints in `apps/engine` must remain completely stateless regarding LLM execution context. Rely entirely on PostgreSQL (`pgvector`) for state persistence.
 
 4. **Framework Agnosticism in Prompts**
-   - When refining Tier 2 Sub-Agents, do not hardcode rigid technology stacks (e.g., "Use Next.js", "Use Tailwind") into the prompt unless strictly instructed by the user. Agents should intuitively infer context from the user's workspace parameters sent natively by the Tier 1 Orchestrator. 
+   - When refining Tier 2 Sub-Agents, do not hardcode rigid technology stacks (e.g., "Use Next.js", "Use Tailwind") into the prompt unless strictly instructed by the user. Agents should intuitively infer context from the user's workspace parameters sent natively by the Tier 1 Orchestrator.
    - Base templates in `packages/agents/src/tier2/agents.ts` should remain universally applicable to any frontend or backend language.
 
 5. **Human-In-The-Loop (HITL) Mandate**
    - While Cerebro handles autonomous coding, testing, and reviewing, final deployments or primary branch merges MUST require human oversight and explicit CLI sign-off. Do not bypass or mock this layer.
+   - The approval workflow must be respected: no file writes without user confirmation via `/mesh/approve`.
+
+6. **Workspace Root Handling**
+   - The CLI passes `workspaceRoot` (current working directory) to the Engine.
+   - All file operations must use this root to resolve relative paths correctly.
+   - Support for multi-directory/multi-repo workflows depends on proper path resolution.
+
+7. **Error Handling & Retry Logic**
+   - Implement graceful error handling with user-friendly error messages.
+   - Use `cleanErrorMessage()` utility to parse Anthropic API error responses.
+   - Circuit Breaker automatically retries on failure until `retry_count` reaches 3.
+   - Log all errors to both console and SSE stream for debugging.
+
+## 6. Development Workflow
+
+### Running Locally
+```bash
+# Install dependencies
+bun install
+
+# Start PostgreSQL with pgvector
+make db-up
+
+# Run Engine API (Terminal 1)
+make dev-engine
+
+# Run CLI (Terminal 2)
+make dev-cli
+# Or: cd apps/cli && bun src/index.ts develop "your feature"
+```
+
+### Testing
+```bash
+# Run all tests
+bun run test
+
+# Run tests in watch mode
+bun run test:watch
+```
+
+### Code Quality
+```bash
+# Format code
+bun run format
+
+# Lint code
+bun run lint
+```
+
+## 7. Environment Variables
+
+Required environment variables (set in `apps/engine/.env` or system environment):
+
+- `ANTHROPIC_API_KEY`: Your Anthropic API key
+- `ANTHROPIC_MODEL`: Model to use (default: `claude-opus-4-6`)
+- `DB_HOST`: PostgreSQL host (default: `localhost`)
+- `DB_PORT`: PostgreSQL port (default: `5432`)
+- `POSTGRES_DB`: Database name (default: `cerebro`)
+- `POSTGRES_USER`: Database user (default: `cerebro`)
+- `POSTGRES_PASSWORD`: Database password (default: `cerebro_password`)
