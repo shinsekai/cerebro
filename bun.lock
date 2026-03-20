@@ -60,6 +60,14 @@
         "postgres": "^3.4.3",
       },
     },
+    "packages/workspace": {
+      "name": "@cerebro/workspace",
+      "version": "1.0.0",
+      "dependencies": {
+        "@cerebro/core": "workspace:*",
+        "zod": "^3.22.4",
+      },
+    },
   },
   "packages": {
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.74.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-srbJV7JKsc5cQ6eVuFzjZO7UR3xEPJqPamHFIe29bs38Ij2IripoAhC0S5NslNbaFUYqBKypmmpzMTpqfHEUDw=="],
@@ -93,6 +101,8 @@
     "@cerebro/database": ["@cerebro/database@workspace:packages/database"],
 
     "@cerebro/engine": ["@cerebro/engine@workspace:apps/engine"],
+
+    "@cerebro/workspace": ["@cerebro/workspace@workspace:packages/workspace"],
 
     "@cfworker/json-schema": ["@cfworker/json-schema@4.1.1", "", {}, "sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og=="],
 

@@ -19,7 +19,9 @@ export class OrchestratorAgent {
    * Returns a structured ExecutionPlan that the Mesh loop uses as the control plane.
    * Also returns the raw result for token tracking.
    */
-  public async planExecution(taskDesc: string): Promise<{ content: ExecutionPlan, raw: any }> {
+  public async planExecution(
+    taskDesc: string,
+  ): Promise<{ content: ExecutionPlan; raw: any }> {
     const prompt = PromptTemplate.fromTemplate(`
       You are the Cerebro Orchestrator (Tier 1). You are the CONTROL PLANE.
       Your job is to analyze the user request and determine which Tier 2 agents need to execute.
@@ -62,7 +64,7 @@ export class OrchestratorAgent {
     // Parse and validate the plan against Zod schema
     let planContent: any;
     const resultAny = rawResult as any;
-    if (typeof resultAny?.content === 'string') {
+    if (typeof resultAny?.content === "string") {
       try {
         const jsonMatch = resultAny.content.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
@@ -72,7 +74,12 @@ export class OrchestratorAgent {
         }
       } catch (e) {
         // Fallback to default plan
-        planContent = { summary: "Default execution plan", steps: [{ agent: "backend", description: "Execute task", depends_on: [] }] };
+        planContent = {
+          summary: "Default execution plan",
+          steps: [
+            { agent: "backend", description: "Execute task", depends_on: [] },
+          ],
+        };
       }
     } else {
       planContent = resultAny.content;

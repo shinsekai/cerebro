@@ -2,7 +2,7 @@ import { ChatAnthropic } from "@langchain/anthropic";
 
 /**
  * Common getter for Tier 2 agents.
- * 
+ *
  * Configures the base model to sonnet with low temperature for deterministic code output.
  */
 export const getTier2Model = () => {

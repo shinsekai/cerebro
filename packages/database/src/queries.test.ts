@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import type { StateTicket, MemoryTicket } from '@cerebro/core';
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import type { StateTicket, MemoryTicket } from "@cerebro/core";
 
 // Mock the sql module
 const mockSql = {
@@ -14,10 +14,10 @@ const mockSql = {
   __selectResult: [] as any[],
   __setSelectResult(result: any[]) {
     this.__selectResult = result;
-  }
+  },
 };
 
-describe('Database Queries (Mocked)', () => {
+describe("Database Queries (Mocked)", () => {
   beforeEach(() => {
     mockSql.__reset();
   });
@@ -26,16 +26,16 @@ describe('Database Queries (Mocked)', () => {
     mockSql.__reset();
   });
 
-  describe('saveStateTicket', () => {
-    it('should call INSERT with correct parameters for new ticket', async () => {
+  describe("saveStateTicket", () => {
+    it("should call INSERT with correct parameters for new ticket", async () => {
       // This test verifies the structure that would be passed to the database
       const ticket: StateTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task: 'Create a login component',
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task: "Create a login component",
         retry_count: 0,
-        status: 'pending',
-        context: { framework: 'react' },
-        error: undefined
+        status: "pending",
+        context: { framework: "react" },
+        error: undefined,
       };
 
       // Simulate the query structure
@@ -44,8 +44,10 @@ describe('Database Queries (Mocked)', () => {
         task: ticket.task,
         retry_count: ticket.retry_count,
         status: ticket.status,
-        context: ticket.context ? { __isJson: true, value: ticket.context } : null,
-        error: ticket.error || null
+        context: ticket.context
+          ? { __isJson: true, value: ticket.context }
+          : null,
+        error: ticket.error || null,
       };
 
       expect(expectedInsert.id).toBe(ticket.id);
@@ -56,12 +58,12 @@ describe('Database Queries (Mocked)', () => {
       expect(expectedInsert.error).toBeNull();
     });
 
-    it('should handle ticket without context', async () => {
+    it("should handle ticket without context", async () => {
       const ticket: StateTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task: 'Create a login component',
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task: "Create a login component",
         retry_count: 0,
-        status: 'pending'
+        status: "pending",
       };
 
       const expectedInsert = {
@@ -70,19 +72,19 @@ describe('Database Queries (Mocked)', () => {
         retry_count: ticket.retry_count,
         status: ticket.status,
         context: null,
-        error: null
+        error: null,
       };
 
       expect(expectedInsert.context).toBeNull();
     });
 
-    it('should handle ticket with error', async () => {
+    it("should handle ticket with error", async () => {
       const ticket: StateTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task: 'Create a login component',
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task: "Create a login component",
         retry_count: 2,
-        status: 'failed',
-        error: 'API request failed'
+        status: "failed",
+        error: "API request failed",
       };
 
       const expectedInsert = {
@@ -91,57 +93,57 @@ describe('Database Queries (Mocked)', () => {
         retry_count: ticket.retry_count,
         status: ticket.status,
         context: null,
-        error: 'API request failed'
+        error: "API request failed",
       };
 
-      expect(expectedInsert.error).toBe('API request failed');
+      expect(expectedInsert.error).toBe("API request failed");
     });
 
-    it('should handle complex context object', async () => {
+    it("should handle complex context object", async () => {
       const ticket: StateTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task: 'Create a login component',
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task: "Create a login component",
         retry_count: 0,
-        status: 'pending',
+        status: "pending",
         context: {
-          framework: 'react',
+          framework: "react",
           version: 18,
-          features: ['hooks', 'context', 'suspense'],
-          config: { theme: 'dark', language: 'en-US' }
-        }
+          features: ["hooks", "context", "suspense"],
+          config: { theme: "dark", language: "en-US" },
+        },
       };
 
       const expectedContext = { __isJson: true, value: ticket.context };
 
       if (expectedContext.value) {
-        expect(expectedContext.value.framework).toBe('react');
+        expect(expectedContext.value.framework).toBe("react");
         expect(expectedContext.value.version).toBe(18);
-        expect(expectedContext.value.features).toContain('hooks');
-        expect(expectedContext.value.config.theme).toBe('dark');
+        expect(expectedContext.value.features).toContain("hooks");
+        expect(expectedContext.value.config.theme).toBe("dark");
       }
     });
   });
 
-  describe('getStateTicket', () => {
-    it('should query with correct ID parameter', async () => {
-      const id = '550e8400-e29b-41d4-a716-446655440000';
+  describe("getStateTicket", () => {
+    it("should query with correct ID parameter", async () => {
+      const id = "550e8400-e29b-41d4-a716-446655440000";
       const expectedQuery = `SELECT * FROM state_tickets WHERE id = ${id}`;
 
-      expect(expectedQuery).toContain('SELECT');
-      expect(expectedQuery).toContain('state_tickets');
+      expect(expectedQuery).toContain("SELECT");
+      expect(expectedQuery).toContain("state_tickets");
       expect(expectedQuery).toContain(id);
     });
   });
 
-  describe('saveMemoryTicket', () => {
-    it('should call INSERT with correct parameters', async () => {
+  describe("saveMemoryTicket", () => {
+    it("should call INSERT with correct parameters", async () => {
       const ticket: MemoryTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task_hash: 'a1b2c3d4e5f6',
-        task_summary: 'Create a login component',
-        solution_code: 'const Login = () => { return <div>Login</div>; };',
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task_hash: "a1b2c3d4e5f6",
+        task_summary: "Create a login component",
+        solution_code: "const Login = () => { return <div>Login</div>; };",
         embedding: [0.1, 0.2, 0.3, 0.4, 0.5],
-        created_at: new Date('2024-01-01T00:00:00.000Z')
+        created_at: new Date("2024-01-01T00:00:00.000Z"),
       };
 
       const expectedInsert = {
@@ -149,23 +151,25 @@ describe('Database Queries (Mocked)', () => {
         task_hash: ticket.task_hash,
         task_summary: ticket.task_summary,
         solution_code: ticket.solution_code,
-        embedding: ticket.embedding ? `[${ticket.embedding.join(',')}]::vector` : null
+        embedding: ticket.embedding
+          ? `[${ticket.embedding.join(",")}]::vector`
+          : null,
       };
 
       expect(expectedInsert.id).toBe(ticket.id);
       expect(expectedInsert.task_hash).toBe(ticket.task_hash);
       expect(expectedInsert.task_summary).toBe(ticket.task_summary);
       expect(expectedInsert.solution_code).toBe(ticket.solution_code);
-      expect(expectedInsert.embedding).toBe('[0.1,0.2,0.3,0.4,0.5]::vector');
+      expect(expectedInsert.embedding).toBe("[0.1,0.2,0.3,0.4,0.5]::vector");
     });
 
-    it('should handle ticket without embedding', async () => {
+    it("should handle ticket without embedding", async () => {
       const ticket: MemoryTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task_hash: 'a1b2c3d4e5f6',
-        task_summary: 'Create a login component',
-        solution_code: 'const Login = () => { return <div>Login</div>; };',
-        created_at: new Date()
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task_hash: "a1b2c3d4e5f6",
+        task_summary: "Create a login component",
+        solution_code: "const Login = () => { return <div>Login</div>; };",
+        created_at: new Date(),
       };
 
       const expectedInsert = {
@@ -173,20 +177,20 @@ describe('Database Queries (Mocked)', () => {
         task_hash: ticket.task_hash,
         task_summary: ticket.task_summary,
         solution_code: ticket.solution_code,
-        embedding: null
+        embedding: null,
       };
 
       expect(expectedInsert.embedding).toBeNull();
     });
 
-    it('should handle empty embedding array', async () => {
+    it("should handle empty embedding array", async () => {
       const ticket: MemoryTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task_hash: 'a1b2c3d4e5f6',
-        task_summary: 'Create a login component',
-        solution_code: 'const Login = () => { return <div>Login</div>; };',
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task_hash: "a1b2c3d4e5f6",
+        task_summary: "Create a login component",
+        solution_code: "const Login = () => { return <div>Login</div>; };",
         embedding: [],
-        created_at: new Date()
+        created_at: new Date(),
       };
 
       const expectedInsert = {
@@ -194,17 +198,17 @@ describe('Database Queries (Mocked)', () => {
         task_hash: ticket.task_hash,
         task_summary: ticket.task_summary,
         solution_code: ticket.solution_code,
-        embedding: '[]::vector'
+        embedding: "[]::vector",
       };
 
-      expect(expectedInsert.embedding).toBe('[]::vector');
+      expect(expectedInsert.embedding).toBe("[]::vector");
     });
 
-    it('should handle complex solution code', async () => {
+    it("should handle complex solution code", async () => {
       const ticket: MemoryTicket = {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        task_hash: 'a1b2c3d4e5f6',
-        task_summary: 'Create a login component with validation',
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        task_hash: "a1b2c3d4e5f6",
+        task_summary: "Create a login component with validation",
         solution_code: `
           import { useState } from 'react';
 
@@ -226,69 +230,69 @@ describe('Database Queries (Mocked)', () => {
             );
           };
         `,
-        created_at: new Date()
+        created_at: new Date(),
       };
 
-      expect(ticket.solution_code).toContain('import { useState }');
-      expect(ticket.solution_code).toContain('const Login = () =>');
-      expect(ticket.solution_code).toContain('handleSubmit');
+      expect(ticket.solution_code).toContain("import { useState }");
+      expect(ticket.solution_code).toContain("const Login = () =>");
+      expect(ticket.solution_code).toContain("handleSubmit");
     });
   });
 
-  describe('searchSimilarMemory', () => {
-    it('should query with correct parameters using default threshold and limit', async () => {
+  describe("searchSimilarMemory", () => {
+    it("should query with correct parameters using default threshold and limit", async () => {
       const embedding = [0.1, 0.2, 0.3];
       const threshold = 0.8;
       const limit = 5;
 
-      const vectorStr = `[${embedding.join(',')}]`;
+      const vectorStr = `[${embedding.join(",")}]`;
       const expectedQuery = `SELECT * FROM memory_tickets WHERE 1 - (embedding <=> ${vectorStr}::vector) > ${threshold} ORDER BY embedding <=> ${vectorStr}::vector LIMIT ${limit}`;
 
-      expect(expectedQuery).toContain('SELECT * FROM memory_tickets');
-      expect(expectedQuery).toContain('1 - (embedding <=>');
-      expect(expectedQuery).toContain('> 0.8');
-      expect(expectedQuery).toContain('LIMIT 5');
+      expect(expectedQuery).toContain("SELECT * FROM memory_tickets");
+      expect(expectedQuery).toContain("1 - (embedding <=>");
+      expect(expectedQuery).toContain("> 0.8");
+      expect(expectedQuery).toContain("LIMIT 5");
     });
 
-    it('should query with custom threshold and limit', async () => {
+    it("should query with custom threshold and limit", async () => {
       const embedding = [0.1, 0.2, 0.3];
       const threshold = 0.7;
       const limit = 10;
 
-      const vectorStr = `[${embedding.join(',')}]`;
+      const vectorStr = `[${embedding.join(",")}]`;
       const expectedQuery = `SELECT * FROM memory_tickets WHERE 1 - (embedding <=> ${vectorStr}::vector) > ${threshold} ORDER BY embedding <=> ${vectorStr}::vector LIMIT ${limit}`;
 
-      expect(expectedQuery).toContain('> 0.7');
-      expect(expectedQuery).toContain('LIMIT 10');
+      expect(expectedQuery).toContain("> 0.7");
+      expect(expectedQuery).toContain("LIMIT 10");
     });
 
-    it('should handle large embedding arrays', async () => {
+    it("should handle large embedding arrays", async () => {
       const embedding = Array.from({ length: 1536 }, (_, i) => i / 1536);
-      const vectorStr = `[${embedding.join(',')}]`;
+      const vectorStr = `[${embedding.join(",")}]`;
 
       expect(vectorStr).toBeDefined();
       expect(vectorStr.length).toBeGreaterThan(100);
       expect(embedding.length).toBe(1536);
     });
 
-    it('should handle negative and positive values in embedding', async () => {
+    it("should handle negative and positive values in embedding", async () => {
       const embedding = [-0.5, 0.3, -0.2, 0.7, -1.0, 1.0];
-      const vectorStr = `[${embedding.join(',')}]`;
+      const vectorStr = `[${embedding.join(",")}]`;
 
-      expect(vectorStr).toBe('[-0.5,0.3,-0.2,0.7,-1,1]');
+      expect(vectorStr).toBe("[-0.5,0.3,-0.2,0.7,-1,1]");
     });
   });
 
-  describe('mock sql helper', () => {
-    it('should create json marker correctly', () => {
+  describe("mock sql helper", () => {
+    it("should create json marker correctly", () => {
       // Test the json function structure
-      const jsonMarker = { __isJson: true, value: { test: 'value' } };
-      expect(jsonMarker).toEqual({ __isJson: true, value: { test: 'value' } });
+      const jsonMarker = { __isJson: true, value: { test: "value" } };
+      expect(jsonMarker).toEqual({ __isJson: true, value: { test: "value" } });
     });
 
-    it('should reset all mocks', () => {
-      mockSql.__insertCalls.push({ test: 'data' });
-      mockSql.__selectCalls.push({ test: 'data' });
+    it("should reset all mocks", () => {
+      mockSql.__insertCalls.push({ test: "data" });
+      mockSql.__selectCalls.push({ test: "data" });
 
       expect(mockSql.__insertCalls.length).toBe(1);
       expect(mockSql.__selectCalls.length).toBe(1);
@@ -299,10 +303,10 @@ describe('Database Queries (Mocked)', () => {
       expect(mockSql.__selectCalls.length).toBe(0);
     });
 
-    it('should set and retrieve select results', () => {
+    it("should set and retrieve select results", () => {
       const mockResults = [
-        { id: '1', task: 'test' },
-        { id: '2', task: 'test2' }
+        { id: "1", task: "test" },
+        { id: "2", task: "test2" },
       ];
 
       mockSql.__setSelectResult(mockResults);

@@ -1,4 +1,4 @@
-import type { StateTicket } from './schemas.js';
+import type { StateTicket } from "./schemas.js";
 
 const MAX_RETRIES = 3;
 
@@ -10,7 +10,7 @@ export class CircuitBreaker {
    */
   static check(ticket: StateTicket): boolean {
     if (ticket.retry_count >= MAX_RETRIES) {
-      ticket.status = 'halted';
+      ticket.status = "halted";
       return false;
     }
     return true;
@@ -22,6 +22,6 @@ export class CircuitBreaker {
   static recordFailure(ticket: StateTicket, errorPayload: string): void {
     ticket.retry_count += 1;
     ticket.error = errorPayload;
-    ticket.status = 'failed';
+    ticket.status = "failed";
   }
 }
