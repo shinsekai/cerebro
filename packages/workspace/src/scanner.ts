@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   Database,
@@ -329,14 +329,45 @@ async function detectMonorepo(rootPath: string): Promise<boolean> {
 }
 
 async function getDependencies(rootPath: string): Promise<string[]> {
+  const deps: string[] = [];
+
   // Try package.json first
   const pkgPath = join(rootPath, "package.json");
   if (existsSync(pkgPath)) {
     try {
       const pkgContent = await readFile(pkgPath, "utf-8");
       const pkg = JSON.parse(pkgContent);
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      return Object.keys(deps);
+      const rootDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+      deps.push(...Object.keys(rootDeps));
+
+      // For monorepos, also scan workspace package.json files
+      if (pkg.workspaces && Array.isArray(pkg.workspaces)) {
+        for (const pattern of pkg.workspaces) {
+          // Simple glob: "apps/*" or "packages/*"
+          const baseDir = pattern.replace("/*", "").replace("*", "");
+          const dirPath = join(rootPath, baseDir);
+          try {
+            const entries = await readdir(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.isDirectory()) {
+                const wsPkgPath = join(dirPath, entry.name, "package.json");
+                try {
+                  const wsPkg = JSON.parse(await readFile(wsPkgPath, "utf-8"));
+                  const wsDeps = {
+                    ...wsPkg.dependencies,
+                    ...wsPkg.devDependencies,
+                  };
+                  deps.push(...Object.keys(wsDeps));
+                } catch {
+                  /* skip */
+                }
+              }
+            }
+          } catch {
+            /* skip */
+          }
+        }
+      }
     } catch {
       // Ignore errors
     }
@@ -348,12 +379,13 @@ async function getDependencies(rootPath: string): Promise<string[]> {
     try {
       const reqContent = await readFile(reqPath, "utf-8");
       // Parse package names from requirements.txt (ignoring version specifiers)
-      return reqContent
+      const pyDeps = reqContent
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith("#"))
         .map((line) => line.split(/[=<>~!;]+/)[0].trim())
         .filter(Boolean);
+      deps.push(...pyDeps);
     } catch {
       // Ignore errors
     }
@@ -370,7 +402,7 @@ async function getDependencies(rootPath: string): Promise<string[]> {
       );
       if (depsMatch) {
         const depsString = depsMatch[1];
-        return depsString
+        const pyDeps = depsString
           .split(/,\s*/)
           .map(
             (dep) =>
@@ -380,13 +412,15 @@ async function getDependencies(rootPath: string): Promise<string[]> {
                 .split(/[=<>~!]+/)[0],
           )
           .filter(Boolean);
+        deps.push(...pyDeps);
       }
     } catch {
       // Ignore errors
     }
   }
 
-  return [];
+  // Deduplicate and return
+  return [...new Set(deps)];
 }
 
 export async function scanWorkspace(

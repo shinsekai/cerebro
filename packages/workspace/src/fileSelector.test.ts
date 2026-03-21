@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import path from "path";
 import { selectRelevantFiles } from "./fileSelector.js";
 

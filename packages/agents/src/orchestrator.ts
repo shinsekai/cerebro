@@ -1,6 +1,6 @@
+import { type ExecutionPlan, ExecutionPlanSchema } from "@cerebro/core";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { PromptTemplate } from "@langchain/core/prompts";
-import { ExecutionPlanSchema, type ExecutionPlan } from "@cerebro/core";
 
 export class OrchestratorAgent {
   private model: ChatAnthropic;

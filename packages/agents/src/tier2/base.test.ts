@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 
 describe("getTier2Model (analyzed from source)", () => {
   beforeEach(() => {
@@ -101,7 +101,7 @@ describe("Tier 2 Model Configuration", () => {
     it("should handle null/undefined environment values", () => {
       const defaultModel = "claude-sonnet-4-6";
 
-      let envModel: string | undefined = undefined;
+      let envModel: string | undefined;
       let selectedModel = envModel || defaultModel;
       expect(selectedModel).toBe(defaultModel);
 
@@ -115,8 +115,8 @@ describe("Tier 2 Model Configuration", () => {
     it("should provide fallback for missing API key", () => {
       const defaultKey = "not_provided";
 
-      let apiKey: string | undefined = undefined;
-      let selectedKey = apiKey || defaultKey;
+      let apiKey: string | undefined;
+      const selectedKey = apiKey || defaultKey;
       expect(selectedKey).toBe(defaultKey);
     });
 

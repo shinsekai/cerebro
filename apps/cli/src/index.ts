@@ -1,19 +1,19 @@
 import {
+  confirm,
   intro,
+  isCancel,
+  multiselect,
   outro,
   select,
-  text,
-  confirm,
-  multiselect,
-  isCancel,
   spinner,
+  text,
 } from "@clack/prompts";
-import color from "picocolors";
-import { parseArgs } from "util";
 import { randomUUID } from "crypto";
-import { cwd, chdir } from "process";
-import path from "path";
 import fs from "fs/promises";
+import path from "path";
+import color from "picocolors";
+import { chdir, cwd } from "process";
+import { parseArgs } from "util";
 
 const { positionals, values } = parseArgs({
   args: process.argv.slice(2),

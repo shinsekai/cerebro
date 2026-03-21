@@ -1,8 +1,8 @@
-import { describe, it, expect } from "bun:test";
-import { buildDirectoryTree } from "./tree.js";
-import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
-import { join } from "path";
+import { describe, expect, it } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
+import { join } from "path";
+import { buildDirectoryTree } from "./tree.js";
 
 describe("buildDirectoryTree", () => {
   it("should build a simple tree structure", async () => {

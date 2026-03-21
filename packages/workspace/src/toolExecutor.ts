@@ -1,6 +1,6 @@
-import type { FileChange } from "@cerebro/core";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { FileChange } from "@cerebro/core";
 
 const DEFAULT_ALLOWED_COMMANDS = [
   // JS/TS

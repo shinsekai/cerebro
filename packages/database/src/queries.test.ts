@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import type { StateTicket, MemoryTicket } from "@cerebro/core";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { MemoryTicket, StateTicket } from "@cerebro/core";
 
 // Mock the sql module
 const mockSql = {

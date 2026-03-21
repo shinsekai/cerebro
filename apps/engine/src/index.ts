@@ -1,37 +1,45 @@
 import "dotenv/config";
-import { Hono } from "hono";
-import { logger } from "hono/logger";
-import { streamSSE } from "hono/streaming";
-import color from "picocolors";
 import {
-  saveStateTicket,
+  agenticBackendAgent,
+  agenticFrontendAgent,
+  agenticOpsAgent,
+  agenticQualityAgent,
+  agenticSecurityAgent,
+  agenticTesterAgent,
+  backendAgent,
+  frontendAgent,
+  OrchestratorAgent,
+  opsAgent,
+  qualityAgent,
+  runAgentLoop,
+  securityAgent,
+  testerAgent,
+} from "@cerebro/agents";
+import {
+  type ApprovalResponse,
+  ApprovalResponseSchema,
+  CircuitBreaker,
+  type FileChange,
+  MemoryTicketSchema,
+  StateTicketSchema,
+} from "@cerebro/core";
+import {
   getStateTicket,
   saveMemoryTicket,
+  saveStateTicket,
   searchSimilarMemory,
 } from "@cerebro/database";
 import {
-  StateTicketSchema,
-  MemoryTicketSchema,
-  CircuitBreaker,
-  ApprovalResponseSchema,
-  ApprovalResponse,
-  FileChange,
-} from "@cerebro/core";
-import {
-  OrchestratorAgent,
-  frontendAgent,
-  backendAgent,
-  testerAgent,
-  qualityAgent,
-  securityAgent,
-  opsAgent,
-} from "@cerebro/agents";
-import {
   buildWorkspaceContext,
   formatContextForPrompt,
+  ToolExecutor,
 } from "@cerebro/workspace";
-import path from "path";
 import fs from "fs/promises";
+import { Hono } from "hono";
+import { logger } from "hono/logger";
+import { streamSSE } from "hono/streaming";
+import path from "path";
+import color from "picocolors";
 
 const app = new Hono();
 
@@ -243,6 +251,19 @@ app.post("/mesh/loop", async (c) => {
         ops: opsAgent,
       } as const;
 
+      // Agentic agent registry (tool-calling loop mode)
+      const agenticAgentRegistry: Record<
+        string,
+        { systemPrompt: string; roleDescription: string }
+      > = {
+        frontend: agenticFrontendAgent,
+        backend: agenticBackendAgent,
+        quality: agenticQualityAgent,
+        security: agenticSecurityAgent,
+        tester: agenticTesterAgent,
+        ops: agenticOpsAgent,
+      };
+
       const agentDescriptions: Record<string, string> = {
         frontend: "Writing UI components...",
         backend: "Writing API and code logic...",
@@ -254,6 +275,7 @@ app.post("/mesh/loop", async (c) => {
 
       // Store agent outputs for dependencies
       const agentOutputs: Record<string, string> = {};
+      const allFileChanges: FileChange[] = [];
 
       while (CircuitBreaker.check(ticket)) {
         try {
@@ -284,16 +306,6 @@ app.post("/mesh/loop", async (c) => {
               continue;
             }
 
-            const agentInstance =
-              agentRegistry[agent as keyof typeof agentRegistry];
-            if (!agentInstance) {
-              await pushLog(
-                `[Control Plane] Warning: Unknown agent type '${agent}'`,
-                color.red,
-              );
-              continue;
-            }
-
             await pushLog(
               `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
               color.magenta,
@@ -312,72 +324,90 @@ app.post("/mesh/loop", async (c) => {
                   .join("\n");
             }
 
-            const result: any = await agentInstance.invoke({
-              context,
-              workspaceContext: contextString,
-            });
-            const tokenDetails = extractTokenDetails(result);
-            agentOutputs[agent] = String(result.content);
+            const agenticConfig = agenticAgentRegistry[agent];
+            if (agenticConfig) {
+              // AGENTIC MODE: use tool-calling loop
+              const executor = new ToolExecutor({ workspaceRoot });
+              const loopResult = await runAgentLoop({
+                systemPrompt: agenticConfig.systemPrompt
+                  .replace("{workspaceContext}", contextString)
+                  .replace("{context}", context),
+                userMessage: `Execute your task: ${description}\n\nOriginal user request: ${ticket.task}`,
+                toolExecutor: executor,
+                maxIterations: 15,
+                onToolCall: async (name, input) => {
+                  await pushLog(
+                    `[Tier 2 ${agent}] Tool: ${name}(${JSON.stringify(input).slice(0, 100)})`,
+                    color.dim,
+                  );
+                },
+                onToolResult: async (name, result) => {
+                  await pushLog(
+                    `[Tier 2 ${agent}] → ${result.slice(0, 150)}`,
+                    color.dim,
+                  );
+                },
+              });
+              agentOutputs[agent] = loopResult.content;
+              allFileChanges.push(...executor.getPendingWrites());
+            } else {
+              // FALLBACK: single-shot mode (old behavior)
+              const agentInstance =
+                agentRegistry[agent as keyof typeof agentRegistry];
+              if (!agentInstance) {
+                await pushLog(
+                  `[Control Plane] Warning: Unknown agent type '${agent}'`,
+                  color.red,
+                );
+                continue;
+              }
+              const result: any = await agentInstance.invoke({
+                context,
+                workspaceContext: contextString,
+              });
+              const tokenDetails = extractTokenDetails(result);
+              agentOutputs[agent] = String(result.content);
 
-            // Track token usage per agent
-            if (agent === "frontend") {
-              frontendTokens += tokenDetails.totalTokens;
-              frontendCost += tokenDetails.cost;
-            }
-            if (agent === "backend") {
-              backendTokens += tokenDetails.totalTokens;
-              backendCost += tokenDetails.cost;
-            }
-            if (agent === "quality") {
-              qualityTokens += tokenDetails.totalTokens;
-              qualityCost += tokenDetails.cost;
-            }
-            if (agent === "security") {
-              securityTokens += tokenDetails.totalTokens;
-              securityCost += tokenDetails.cost;
-            }
-            if (agent === "tester") {
-              testerTokens += tokenDetails.totalTokens;
-              testerCost += tokenDetails.cost;
-            }
-            if (agent === "ops") {
-              opsTokens += tokenDetails.totalTokens;
-              opsCost += tokenDetails.cost;
+              // Track token usage per agent (only for non-agentic mode)
+              if (agent === "frontend") {
+                frontendTokens += tokenDetails.totalTokens;
+                frontendCost += tokenDetails.cost;
+              }
+              if (agent === "backend") {
+                backendTokens += tokenDetails.totalTokens;
+                backendCost += tokenDetails.cost;
+              }
+              if (agent === "quality") {
+                qualityTokens += tokenDetails.totalTokens;
+                qualityCost += tokenDetails.cost;
+              }
+              if (agent === "security") {
+                securityTokens += tokenDetails.totalTokens;
+                securityCost += tokenDetails.cost;
+              }
+              if (agent === "tester") {
+                testerTokens += tokenDetails.totalTokens;
+                testerCost += tokenDetails.cost;
+              }
+              if (agent === "ops") {
+                opsTokens += tokenDetails.totalTokens;
+                opsCost += tokenDetails.cost;
+              }
             }
 
             await pushLog(
               `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ` +
-                `${description} (${String(result.content).length} chars, ${tokenDetails.totalTokens} tokens, ${formatCost(tokenDetails.cost)})`,
+                `${description} completed`,
               color.green,
             );
           }
 
-          // Extract file changes from agent outputs
-          const fileChanges: FileChange[] = [];
-
-          for (const [agent, output] of Object.entries(agentOutputs)) {
-            // Parse file paths from agent output format: "// FILE: path/to/file.ts\ncontent"
-            const fileMatches = output.matchAll(
-              /\/\/ FILE: ([^\n]+)\n([\s\S]*?)(?=\n\/\/ FILE:|\n$|$)/g,
-            );
-
-            for (const match of fileMatches) {
-              const filePath = match[1].trim();
-              const content = match[2].trim();
-              const fullPath = path.join(workspaceRoot, filePath);
-              const exists = await fs
-                .access(fullPath)
-                .then(() => true)
-                .catch(() => false);
-
-              fileChanges.push({
-                path: filePath,
-                content,
-                operation: exists ? "update" : "create",
-                isNew: !exists,
-              });
-            }
+          // Deduplicate: last writer wins per path
+          const dedupMap = new Map<string, FileChange>();
+          for (const fc of allFileChanges) {
+            dedupMap.set(fc.path, fc);
           }
+          const fileChanges = Array.from(dedupMap.values());
 
           // If there are file changes, request approval
           if (fileChanges.length > 0) {

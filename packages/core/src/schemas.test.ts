@@ -1,5 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import { StateTicketSchema, MemoryTicketSchema } from "./schemas.js";
+import { describe, expect, it } from "bun:test";
+import { MemoryTicketSchema, StateTicketSchema } from "./schemas.js";
 
 describe("StateTicketSchema", () => {
   describe("validation", () => {
