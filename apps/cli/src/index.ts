@@ -31,6 +31,29 @@ const isHelp = values.help || positionals[0] === "help";
 const command = isHelp ? "help" : positionals[0];
 const target = positionals.slice(1).join(" "); // e.g. "my new feature"
 
+async function findWorkspaceRoot(startDir: string): Promise<string> {
+  let current = startDir;
+  while (current !== path.dirname(current)) {
+    // Check for monorepo markers
+    try {
+      await fs.access(path.join(current, "turbo.json"));
+      return current;
+    } catch {}
+    try {
+      const pkg = JSON.parse(
+        await fs.readFile(path.join(current, "package.json"), "utf-8"),
+      );
+      if (pkg.workspaces && Array.isArray(pkg.workspaces)) return current;
+    } catch {}
+    try {
+      await fs.access(path.join(current, "pnpm-workspace.yaml"));
+      return current;
+    } catch {}
+    current = path.dirname(current);
+  }
+  return startDir; // Fallback to original dir
+}
+
 async function main() {
   let action = command;
   let taskDesc = target;
@@ -118,7 +141,7 @@ async function main() {
           task: taskDesc,
           retry_count: 0,
           status: "pending",
-          workspaceRoot: cwd(),
+          workspaceRoot: await findWorkspaceRoot(cwd()),
         };
         const res = await fetch("http://localhost:8080/mesh/loop", {
           method: "POST",
