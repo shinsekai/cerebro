@@ -26,3 +26,4 @@ export {
   type TreeOptions,
   TreeOptionsSchema,
 } from "./tree.js";
+export { ToolExecutor, type ToolExecutorOptions } from "./toolExecutor.js";
