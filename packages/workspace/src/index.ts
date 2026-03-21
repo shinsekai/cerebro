@@ -21,9 +21,9 @@ export {
 export { formatContextForPrompt } from "./format.js";
 export { scanWorkspace } from "./scanner.js";
 export * from "./schemas.js";
+export { ToolExecutor, type ToolExecutorOptions } from "./toolExecutor.js";
 export {
   buildDirectoryTree,
   type TreeOptions,
   TreeOptionsSchema,
 } from "./tree.js";
-export { ToolExecutor, type ToolExecutorOptions } from "./toolExecutor.js";

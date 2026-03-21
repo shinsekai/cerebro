@@ -26,7 +26,7 @@ export function formatContextForPrompt(ctx: WorkspaceContext): string {
       if (file.truncated) {
         output += "\n... (content truncated due to size limit)";
       }
-      output += "\n--- END ${file.path} ---\n";
+      output += `\n--- END ${file.path} ---\n`;
     }
   }
 

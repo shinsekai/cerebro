@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, expect, it } from "bun:test";
 
 // We need to mock the LangChain dependencies before importing the module
 // Since Bun doesn't have jest, we'll use Bun's mock functionality
