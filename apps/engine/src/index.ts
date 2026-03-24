@@ -702,6 +702,294 @@ app.post("/mesh/approve", async (c) => {
   }
 });
 
+// --- Review Endpoint ---
+app.post("/mesh/review", async (c) => {
+  const body = await c.req.json();
+  const ticket = StateTicketSchema.parse(body);
+  const workspaceRoot = (body as any).workspaceRoot || process.cwd();
+  const diff = (body as any).diff || "";
+  const reviewTarget = (body as any).reviewTarget || "workspace";
+
+  return streamSSE(c, async (stream) => {
+    let orchestratorTokens = 0;
+    let qualityTokens = 0;
+    let securityTokens = 0;
+    let orchestratorCost = 0;
+    let qualityCost = 0;
+    let securityCost = 0;
+
+    // Pricing configuration (per 1M tokens as of 2025)
+    const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+      "claude-opus-4-6": { input: 15.0, output: 75.0 },
+      "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
+      "claude-haiku-4-5-20251001": { input: 0.25, output: 1.25 },
+    };
+
+    const currentModel = process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
+    const currentPricing =
+      MODEL_PRICING[currentModel] || MODEL_PRICING["claude-opus-4-6"];
+
+    // Extract input/output tokens and calculate cost
+    const extractTokenDetails = (res: any) => {
+      const usage = res?.usage_metadata || {};
+      const inputTokens = usage.input_tokens || 0;
+      const outputTokens = usage.output_tokens || 0;
+      const totalTokens = usage.total_tokens || inputTokens + outputTokens;
+
+      const cost =
+        (inputTokens / 1_000_000) * currentPricing.input +
+        (outputTokens / 1_000_000) * currentPricing.output;
+
+      return { inputTokens, outputTokens, totalTokens, cost };
+    };
+
+    // Format cost for display
+    const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
+
+    // Helper to log beautifully and pipe to CLI
+    const pushLog = async (
+      msg: string,
+      engineColor: (str: string) => string = color.white,
+    ) => {
+      console.log(color.cyan(`[Review]`) + ` ` + engineColor(msg));
+      await stream.writeSSE({ data: msg });
+    };
+
+    try {
+      await pushLog(
+        `Starting Code Review for Ticket: ${ticket.id}`,
+        color.gray,
+      );
+      await pushLog(`Review target: "${reviewTarget}"`, color.bold);
+
+      // Build workspace context for agent awareness
+      let contextString = "";
+      try {
+        const wsContext = await buildWorkspaceContext(
+          workspaceRoot,
+          ticket.task,
+        );
+        contextString = formatContextForPrompt(wsContext);
+        await pushLog(
+          `[Context] Workspace scanned: ${wsContext.profile.framework} / ${wsContext.profile.language}`,
+          color.cyan,
+        );
+      } catch (scanError: any) {
+        await pushLog(
+          `[Context] Workspace scan failed: ${scanError.message}. Agents will work with empty context.`,
+          color.yellow,
+        );
+        contextString = "";
+      }
+
+      const orchestrator = new OrchestratorAgent();
+      await pushLog(
+        `[Tier 1 Orchestrator] Analyzing review request...`,
+        color.magenta,
+      );
+      const plan: any = await orchestrator.planExecution(ticket.task, "review");
+      const orchestratorTokenDetails = extractTokenDetails(plan.raw);
+      orchestratorTokens += orchestratorTokenDetails.totalTokens;
+      orchestratorCost += orchestratorTokenDetails.cost;
+      await pushLog(
+        `[Tier 1 Orchestrator] Plan generated successfully. (${orchestratorTokenDetails.totalTokens} tokens, ${formatCost(orchestratorTokenDetails.cost)})`,
+        color.green,
+      );
+
+      ticket.status = "in-progress";
+
+      // --- Review Mode: Only run quality and security agents ---
+      const reviewAgents = ["quality", "security"];
+
+      // Agentic agent registry (tool-calling loop mode)
+      const agenticAgentRegistry: Record<
+        string,
+        { systemPrompt: string; roleDescription: string }
+      > = {
+        quality: agenticQualityAgent,
+        security: agenticSecurityAgent,
+      };
+
+      const agentDescriptions: Record<string, string> = {
+        quality: "Auditing code formatting and AST rules...",
+        security: "Scanning for OWASP vulnerabilities...",
+      };
+
+      // Collect findings from both agents
+      const allFindings: Array<{
+        severity: "critical" | "warning" | "info";
+        file: string;
+        line: number;
+        message: string;
+        suggestion?: string;
+      }> = [];
+
+      for (const agent of reviewAgents) {
+        await pushLog(
+          `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
+          color.magenta,
+        );
+
+        const agenticConfig = agenticAgentRegistry[agent];
+        const useAgentic = process.env.CEREBRO_AGENTIC !== "false";
+
+        let agentFindings: any[] = [];
+        let tokenCount = 0;
+        let agentCost = 0;
+
+        if (useAgentic && agenticConfig) {
+          // AGENTIC MODE: For review, we use a custom single-shot prompt for structured JSON output
+          const { ChatAnthropic } = await import("@langchain/anthropic");
+          const reviewModel = new ChatAnthropic({
+            model: process.env.ANTHROPIC_MODEL || "claude-opus-4-6",
+            temperature: 0,
+            apiKey: process.env.ANTHROPIC_API_KEY || "not_provided",
+          });
+
+          const reviewPrompt = `${contextString}
+
+You are conducting a code review for the following changes:
+
+GIT DIFF:
+${diff}
+
+${
+  agent === "quality"
+    ? `
+You are a CODE QUALITY REVIEWER. Analyze the diff for:
+1. Code style issues (formatting, naming conventions)
+2. Code complexity (cyclomatic complexity, nesting)
+3. Potential bugs or logic errors
+4. Code duplication
+5. Missing error handling
+6. TypeScript/typing issues
+`
+    : `
+You are a SECURITY REVIEWER. Analyze the diff for:
+1. SQL injection vulnerabilities
+2. XSS (cross-site scripting) vectors
+3. CSRF protection issues
+4. Insecure direct object references
+5. Hardcoded secrets or credentials
+6. Missing input validation
+7. Insecure dependencies
+`
+}
+
+OUTPUT STRICTLY VALID JSON (no markdown, no explanation):
+[
+  {
+    "severity": "critical|warning|info",
+    "file": "path/to/file.ext",
+    "line": 42,
+    "message": "Description of the issue",
+    "suggestion": "How to fix it (optional)"
+  }
+]
+
+Severity levels:
+- critical: Security vulnerabilities, major bugs that could crash the system
+- warning: Code quality issues, potential bugs, deprecated patterns
+- info: Minor issues, suggestions for improvement
+
+If you find no issues, return an empty array: []`;
+
+          const result: any = await reviewModel.invoke(reviewPrompt);
+          const tokenDetails = extractTokenDetails(result);
+          tokenCount = tokenDetails.totalTokens;
+          agentCost = tokenDetails.cost;
+
+          try {
+            const content = result.content as string;
+            // Try to extract JSON from the response
+            const jsonMatch = content.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              agentFindings = JSON.parse(jsonMatch[0]);
+            } else {
+              // Try to parse entire content as JSON
+              agentFindings = JSON.parse(content);
+            }
+          } catch (parseError) {
+            await pushLog(
+              `[Tier 2 ${agent}] Failed to parse findings as JSON`,
+              color.yellow,
+            );
+          }
+        }
+
+        await pushLog(
+          `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] Analysis complete (${tokenCount} tokens, ${formatCost(agentCost)})`,
+          color.green,
+        );
+
+        // Track tokens
+        if (agent === "quality") {
+          qualityTokens += tokenCount;
+          qualityCost += agentCost;
+        } else {
+          securityTokens += tokenCount;
+          securityCost += agentCost;
+        }
+
+        // Merge findings
+        allFindings.push(...agentFindings);
+      }
+
+      ticket.status = "completed";
+      await saveStateTicket(ticket);
+
+      // Send review result
+      await stream.writeSSE({
+        event: "review_result",
+        data: JSON.stringify({
+          findings: allFindings,
+          summary: `Found ${allFindings.length} issue(s)`,
+        }),
+      });
+
+      const totalTokens = orchestratorTokens + qualityTokens + securityTokens;
+      const totalCost = orchestratorCost + qualityCost + securityCost;
+      console.log(
+        color.bgBlue(
+          color.white(
+            `\n 📊 Total Tokens Consumed: ${totalTokens} | Cost: ${formatCost(totalCost)} \n`,
+          ),
+        ),
+      );
+
+      const tokenUsage = {
+        orchestrator: {
+          tokens: orchestratorTokens,
+          cost: orchestratorCost,
+        },
+        quality: { tokens: qualityTokens, cost: qualityCost },
+        security: { tokens: securityTokens, cost: securityCost },
+        total: { tokens: totalTokens, cost: totalCost },
+        model: currentModel,
+      };
+      await stream.writeSSE({
+        event: "done",
+        data: JSON.stringify({
+          success: true,
+          ticket,
+          usage: tokenUsage,
+        }),
+      });
+
+      await pushLog(`[Review] Analysis complete. Halting.`, color.cyan);
+    } catch (error: any) {
+      console.error(color.red(`[Review] Fatal Error:`), error);
+      await stream.writeSSE({
+        event: "error",
+        data: JSON.stringify({
+          success: false,
+          error: cleanErrorMessage(error?.message),
+        }),
+      });
+    }
+  });
+});
+
 export default {
   port: 8080,
   idleTimeout: 255, // 255 seconds max limit in Bun
