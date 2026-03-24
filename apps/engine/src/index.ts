@@ -18,6 +18,7 @@ import {
 import {
   buildExecutionWaves,
   getDownstreamAgents,
+  getModelForAgent,
   type ApprovalResponse,
   ApprovalResponseSchema,
   CircuitBreaker,
@@ -167,6 +168,22 @@ app.post("/mesh/loop", async (c) => {
       "claude-opus-4-6": { input: 15.0, output: 75.0 },
       "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
       "claude-haiku-4-5-20251001": { input: 0.25, output: 1.25 },
+    };
+
+    // Helper to get model name for an agent step
+    const getModelForStep = (step: {
+      agent: string;
+      lightweight?: boolean;
+    }): string => {
+      if (step.lightweight) {
+        return getModelForAgent("lightweight");
+      }
+      return getModelForAgent(step.agent);
+    };
+
+    // Helper to get pricing for a model
+    const getPricingForModel = (modelName: string) => {
+      return MODEL_PRICING[modelName] || MODEL_PRICING["claude-opus-4-6"];
     };
 
     const currentModel = process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
@@ -366,6 +383,8 @@ app.post("/mesh/loop", async (c) => {
                 if (useAgentic && agenticConfig) {
                   // AGENTIC MODE: use tool-calling loop
                   const executor = new ToolExecutor({ workspaceRoot });
+                  const modelName = getModelForStep(step);
+                  const modelPricing = getPricingForModel(modelName);
                   const loopResult = await runAgentLoop({
                     systemPrompt: agenticConfig.systemPrompt
                       .replace("{workspaceContext}", contextString)
@@ -385,14 +404,14 @@ app.post("/mesh/loop", async (c) => {
                         color.dim,
                       );
                     },
+                    agentType: step.agent,
+                    lightweight: step.lightweight,
                   });
                   agentFileChanges = executor.getPendingWrites();
                   tokenCount = loopResult.totalTokens;
                   agentCost =
-                    (loopResult.inputTokens / 1_000_000) *
-                      currentPricing.input +
-                    (loopResult.outputTokens / 1_000_000) *
-                      currentPricing.output;
+                    (loopResult.inputTokens / 1_000_000) * modelPricing.input +
+                    (loopResult.outputTokens / 1_000_000) * modelPricing.output;
                 } else {
                   // FALLBACK: single-shot mode (old behavior)
                   const agentInstance =
@@ -733,6 +752,7 @@ app.post("/mesh/review", async (c) => {
   const workspaceRoot = (body as any).workspaceRoot || process.cwd();
   const diff = (body as any).diff || "";
   const reviewTarget = (body as any).reviewTarget || "workspace";
+  const lightweight = (body as any).lightweight || false;
 
   return streamSSE(c, async (stream) => {
     let orchestratorTokens = 0;
@@ -747,6 +767,11 @@ app.post("/mesh/review", async (c) => {
       "claude-opus-4-6": { input: 15.0, output: 75.0 },
       "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
       "claude-haiku-4-5-20251001": { input: 0.25, output: 1.25 },
+    };
+
+    // Helper to get pricing for a model
+    const getPricingForModel = (modelName: string) => {
+      return MODEL_PRICING[modelName] || MODEL_PRICING["claude-opus-4-6"];
     };
 
     const currentModel = process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
@@ -864,8 +889,11 @@ app.post("/mesh/review", async (c) => {
         if (useAgentic && agenticConfig) {
           // AGENTIC MODE: For review, we use a custom single-shot prompt for structured JSON output
           const { ChatAnthropic } = await import("@langchain/anthropic");
+          const reviewModelName = lightweight
+            ? getModelForAgent("lightweight")
+            : process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
           const reviewModel = new ChatAnthropic({
-            model: process.env.ANTHROPIC_MODEL || "claude-opus-4-6",
+            model: reviewModelName,
             temperature: 0,
             apiKey: process.env.ANTHROPIC_API_KEY || "not_provided",
           });
@@ -921,7 +949,10 @@ If you find no issues, return an empty array: []`;
           const result: any = await reviewModel.invoke(reviewPrompt);
           const tokenDetails = extractTokenDetails(result);
           tokenCount = tokenDetails.totalTokens;
-          agentCost = tokenDetails.cost;
+          const modelPricing = getPricingForModel(reviewModelName);
+          agentCost =
+            (tokenDetails.inputTokens / 1_000_000) * modelPricing.input +
+            (tokenDetails.outputTokens / 1_000_000) * modelPricing.output;
 
           try {
             const content = result.content as string;

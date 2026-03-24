@@ -47,12 +47,14 @@ export class OrchestratorAgent {
           {{
             "agent": "quality",
             "description": "Analyze code for quality issues",
-            "depends_on": []
+            "depends_on": [],
+            "lightweight": false
           }},
           {{
             "agent": "security",
             "description": "Scan for security vulnerabilities",
-            "depends_on": []
+            "depends_on": [],
+            "lightweight": false
           }}
         ]
       }}
@@ -62,6 +64,7 @@ export class OrchestratorAgent {
       - Quality analyzes code style, complexity, bugs, error handling, typing
       - Security scans for SQL injection, XSS, CSRF, secrets, input validation
       - Both agents run in parallel (no dependencies)
+      - For simple tasks, mark quality and security agents as lightweight: true to use a faster/cheaper model
     `);
       }
 
@@ -88,7 +91,8 @@ export class OrchestratorAgent {
           {{
             "agent": "backend",
             "description": "What this agent will do",
-            "depends_on": []
+            "depends_on": [],
+            "lightweight": false
           }}
         ]
       }}
@@ -101,6 +105,7 @@ export class OrchestratorAgent {
       - Type error → backend/frontend, quality, tester
       - Security issue → backend/frontend, security, tester
       - Always include tester to verify fix
+      - For simple tasks, mark quality and security agents as lightweight: true to use a faster/cheaper model
     `);
       }
 
@@ -127,7 +132,8 @@ export class OrchestratorAgent {
           {{
             "agent": "backend",
             "description": "What this agent will do",
-            "depends_on": []
+            "depends_on": [],
+            "lightweight": false
           }}
         ]
       }}
@@ -139,6 +145,7 @@ export class OrchestratorAgent {
       - For code changes: backend → quality → security → tester
       - For UI work: frontend → quality → tester
       - For full-stack: backend → frontend → quality → security → tester
+      - For simple tasks, mark quality and security agents as lightweight: true to use a faster/cheaper model
     `);
     };
 

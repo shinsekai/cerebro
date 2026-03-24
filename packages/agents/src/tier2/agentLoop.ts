@@ -48,6 +48,8 @@ export interface RunAgentLoopOptions {
   maxIterations?: number;
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string) => void;
+  agentType?: string;
+  lightweight?: boolean;
 }
 
 // ToolUseBlock compatible with LangChain's ContentBlock type
@@ -88,9 +90,11 @@ export async function runAgentLoop(
     maxIterations = 15,
     onToolCall,
     onToolResult,
+    agentType,
+    lightweight = false,
   } = options;
 
-  const model = getTier2ModelWithTools();
+  const model = getTier2ModelWithTools(agentType, { lightweight });
   const messages: BaseMessage[] = [
     new SystemMessage(systemPrompt),
     new HumanMessage(userMessage),

@@ -45,6 +45,7 @@ export const AgentStepSchema = z.object({
   agent: AgentTypeSchema,
   description: z.string(),
   depends_on: z.array(AgentTypeSchema).default([]),
+  lightweight: z.boolean().default(false),
 });
 
 export type AgentStep = z.infer<typeof AgentStepSchema>;
