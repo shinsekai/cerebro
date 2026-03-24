@@ -16,6 +16,7 @@ import {
   testerAgent,
 } from "@cerebro/agents";
 import {
+  buildExecutionWaves,
   type ApprovalResponse,
   ApprovalResponseSchema,
   CircuitBreaker,
@@ -288,151 +289,156 @@ app.post("/mesh/loop", async (c) => {
             color.cyan,
           );
 
-          // Execute agents according to the plan
-          const { steps } = plan.content;
+          // Build execution waves for parallel execution
+          const waves = buildExecutionWaves(plan.content);
 
-          for (const step of steps) {
-            const { agent, description } = step;
-
-            // Check dependencies are met
-            const pendingDeps = step.depends_on.filter(
-              (dep: string) => !agentOutputs[dep],
-            );
-            if (pendingDeps.length > 0) {
-              await pushLog(
-                `[Control Plane] Skipping ${agent}: waiting for ${pendingDeps.join(", ")}`,
-                color.yellow,
-              );
-              continue;
-            }
-
+          for (let wi = 0; wi < waves.length; wi++) {
+            const wave = waves[wi];
             await pushLog(
-              `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
-              color.magenta,
+              `[Control Plane] Wave ${wi + 1}/${waves.length}: ${wave.map((s) => s.agent).join(", ")}`,
+              color.cyan,
             );
 
-            // Build context from previous agent outputs
-            let context = ticket.task;
-            if (step.depends_on.length > 0) {
-              context +=
-                "\n\n" +
-                step.depends_on
-                  .map(
-                    (dep: string) =>
-                      `--- Output from ${dep} agent ---\n${agentOutputs[dep]}\n--- End ${dep} output ---`,
-                  )
-                  .join("\n");
-            }
+            // Execute agents in this wave in parallel
+            const results = await Promise.allSettled(
+              wave.map(async (step) => {
+                const { agent, description } = step;
 
-            const agenticConfig = agenticAgentRegistry[agent];
-            const useAgentic = process.env.CEREBRO_AGENTIC !== "false";
-
-            if (useAgentic && agenticConfig) {
-              // AGENTIC MODE: use tool-calling loop
-              const executor = new ToolExecutor({ workspaceRoot });
-              const loopResult = await runAgentLoop({
-                systemPrompt: agenticConfig.systemPrompt
-                  .replace("{workspaceContext}", contextString)
-                  .replace("{context}", context),
-                userMessage: `Execute your task: ${description}\n\nOriginal user request: ${ticket.task}`,
-                toolExecutor: executor,
-                maxIterations: 15,
-                onToolCall: async (name, input) => {
-                  await pushLog(
-                    `[Tier 2 ${agent}] Tool: ${name}(${JSON.stringify(input).slice(0, 100)})`,
-                    color.dim,
-                  );
-                },
-                onToolResult: async (name, result) => {
-                  await pushLog(
-                    `[Tier 2 ${agent}] → ${result.slice(0, 150)}`,
-                    color.dim,
-                  );
-                },
-              });
-              agentOutputs[agent] = loopResult.content;
-              allFileChanges.push(...executor.getPendingWrites());
-
-              // Track token usage for agentic mode
-              const agenticCost =
-                (loopResult.inputTokens / 1_000_000) * currentPricing.input +
-                (loopResult.outputTokens / 1_000_000) * currentPricing.output;
-              switch (agent) {
-                case "frontend":
-                  frontendTokens += loopResult.totalTokens;
-                  frontendCost += agenticCost;
-                  break;
-                case "backend":
-                  backendTokens += loopResult.totalTokens;
-                  backendCost += agenticCost;
-                  break;
-                case "quality":
-                  qualityTokens += loopResult.totalTokens;
-                  qualityCost += agenticCost;
-                  break;
-                case "security":
-                  securityTokens += loopResult.totalTokens;
-                  securityCost += agenticCost;
-                  break;
-                case "tester":
-                  testerTokens += loopResult.totalTokens;
-                  testerCost += agenticCost;
-                  break;
-                case "ops":
-                  opsTokens += loopResult.totalTokens;
-                  opsCost += agenticCost;
-                  break;
-              }
-            } else {
-              // FALLBACK: single-shot mode (old behavior)
-              const agentInstance =
-                agentRegistry[agent as keyof typeof agentRegistry];
-              if (!agentInstance) {
                 await pushLog(
-                  `[Control Plane] Warning: Unknown agent type '${agent}'`,
+                  `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
+                  color.magenta,
+                );
+
+                // Build context from previous wave outputs (dependencies already resolved)
+                let context = ticket.task;
+                if (step.depends_on.length > 0) {
+                  context +=
+                    "\n\n" +
+                    step.depends_on
+                      .map(
+                        (dep: string) =>
+                          `--- Output from ${dep} agent ---\n${agentOutputs[dep]}\n--- End ${dep} output ---`,
+                      )
+                      .join("\n");
+                }
+
+                const agenticConfig = agenticAgentRegistry[agent];
+                const useAgentic = process.env.CEREBRO_AGENTIC !== "false";
+
+                let agentFileChanges: FileChange[] = [];
+                let tokenCount = 0;
+                let agentCost = 0;
+
+                if (useAgentic && agenticConfig) {
+                  // AGENTIC MODE: use tool-calling loop
+                  const executor = new ToolExecutor({ workspaceRoot });
+                  const loopResult = await runAgentLoop({
+                    systemPrompt: agenticConfig.systemPrompt
+                      .replace("{workspaceContext}", contextString)
+                      .replace("{context}", context),
+                    userMessage: `Execute your task: ${description}\n\nOriginal user request: ${ticket.task}`,
+                    toolExecutor: executor,
+                    maxIterations: 15,
+                    onToolCall: async (name, input) => {
+                      await pushLog(
+                        `[Tier 2 ${agent}] Tool: ${name}(${JSON.stringify(input).slice(0, 100)})`,
+                        color.dim,
+                      );
+                    },
+                    onToolResult: async (name, result) => {
+                      await pushLog(
+                        `[Tier 2 ${agent}] → ${result.slice(0, 150)}`,
+                        color.dim,
+                      );
+                    },
+                  });
+                  agentFileChanges = executor.getPendingWrites();
+                  tokenCount = loopResult.totalTokens;
+                  agentCost =
+                    (loopResult.inputTokens / 1_000_000) *
+                      currentPricing.input +
+                    (loopResult.outputTokens / 1_000_000) *
+                      currentPricing.output;
+                } else {
+                  // FALLBACK: single-shot mode (old behavior)
+                  const agentInstance =
+                    agentRegistry[agent as keyof typeof agentRegistry];
+                  if (!agentInstance) {
+                    await pushLog(
+                      `[Control Plane] Warning: Unknown agent type '${agent}'`,
+                      color.red,
+                    );
+                    throw new Error(`Unknown agent type '${agent}'`);
+                  }
+                  const result: any = await agentInstance.invoke({
+                    context,
+                    workspaceContext: contextString,
+                  });
+                  const tokenDetails = extractTokenDetails(result);
+                  tokenCount = tokenDetails.totalTokens;
+                  agentCost = tokenDetails.cost;
+                }
+
+                await pushLog(
+                  `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ` +
+                    `${description} completed`,
+                  color.green,
+                );
+
+                return {
+                  agent,
+                  output: `${description} completed`,
+                  fileChanges: agentFileChanges,
+                  tokenDetails: { totalTokens: tokenCount, cost: agentCost },
+                };
+              }),
+            );
+
+            // Process results: store outputs and file changes from successful agents
+            for (const r of results) {
+              if (r.status === "fulfilled") {
+                const { agent, output, fileChanges, tokenDetails } = r.value;
+                agentOutputs[agent] = output;
+                allFileChanges.push(...fileChanges);
+
+                // Track tokens per agent
+                switch (agent) {
+                  case "frontend":
+                    frontendTokens += tokenDetails.totalTokens;
+                    frontendCost += tokenDetails.cost;
+                    break;
+                  case "backend":
+                    backendTokens += tokenDetails.totalTokens;
+                    backendCost += tokenDetails.cost;
+                    break;
+                  case "quality":
+                    qualityTokens += tokenDetails.totalTokens;
+                    qualityCost += tokenDetails.cost;
+                    break;
+                  case "security":
+                    securityTokens += tokenDetails.totalTokens;
+                    securityCost += tokenDetails.cost;
+                    break;
+                  case "tester":
+                    testerTokens += tokenDetails.totalTokens;
+                    testerCost += tokenDetails.cost;
+                    break;
+                  case "ops":
+                    opsTokens += tokenDetails.totalTokens;
+                    opsCost += tokenDetails.cost;
+                    break;
+                }
+              } else {
+                const reason =
+                  r.reason instanceof Error
+                    ? r.reason.message
+                    : String(r.reason);
+                await pushLog(
+                  `[Wave ${wi + 1}] Agent failed: ${reason}`,
                   color.red,
                 );
-                continue;
-              }
-              const result: any = await agentInstance.invoke({
-                context,
-                workspaceContext: contextString,
-              });
-              const tokenDetails = extractTokenDetails(result);
-              agentOutputs[agent] = String(result.content);
-
-              // Track token usage per agent (only for non-agentic mode)
-              if (agent === "frontend") {
-                frontendTokens += tokenDetails.totalTokens;
-                frontendCost += tokenDetails.cost;
-              }
-              if (agent === "backend") {
-                backendTokens += tokenDetails.totalTokens;
-                backendCost += tokenDetails.cost;
-              }
-              if (agent === "quality") {
-                qualityTokens += tokenDetails.totalTokens;
-                qualityCost += tokenDetails.cost;
-              }
-              if (agent === "security") {
-                securityTokens += tokenDetails.totalTokens;
-                securityCost += tokenDetails.cost;
-              }
-              if (agent === "tester") {
-                testerTokens += tokenDetails.totalTokens;
-                testerCost += tokenDetails.cost;
-              }
-              if (agent === "ops") {
-                opsTokens += tokenDetails.totalTokens;
-                opsCost += tokenDetails.cost;
               }
             }
-
-            await pushLog(
-              `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ` +
-                `${description} completed`,
-              color.green,
-            );
           }
 
           // Deduplicate: last writer wins per path
