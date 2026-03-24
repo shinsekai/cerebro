@@ -16,6 +16,8 @@ import { chdir, cwd } from "process";
 import { parseArgs } from "util";
 import {
   buildDirectoryTree,
+  indexWorkspace,
+  type IndexWorkspaceResult,
   type WorkspaceProfile,
   scanWorkspace,
 } from "@cerebro/workspace";
@@ -481,6 +483,57 @@ async function main() {
             ),
           );
           console.log(color.dim('  echo ".cerebro" >> .gitignore'));
+        }
+
+        // Offer semantic indexing if VOYAGE_API_KEY is set
+        if (process.env.VOYAGE_API_KEY) {
+          const shouldIndex = await confirm({
+            message:
+              "Index workspace for semantic search? (improves context quality, ~$0.02)",
+            initialValue: false,
+          });
+
+          if (shouldIndex && !isCancel(shouldIndex)) {
+            const indexSpinner = spinner();
+            indexSpinner.start(`Indexing ${fileCount} files...`);
+
+            try {
+              const result: IndexWorkspaceResult =
+                await indexWorkspace(workspaceRoot);
+              indexSpinner.stop(
+                color.green(
+                  `✔ Semantic index created (${result.filesIndexed} files)`,
+                ),
+              );
+
+              if (result.errors.length > 0) {
+                console.log(
+                  color.dim(
+                    `\n⚠ ${result.errors.length} files skipped due to errors`,
+                  ),
+                );
+              }
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              // Check if it's a database connection error
+              if (
+                message.includes("ECONNREFUSED") ||
+                message.includes("database") ||
+                message.includes("connection")
+              ) {
+                indexSpinner.stop(
+                  color.yellow(
+                    "⚠ Database unavailable — skipping semantic index. Run `make db-up` first.",
+                  ),
+                );
+              } else {
+                indexSpinner.stop(
+                  color.yellow(`⚠ Indexing failed: ${message}`),
+                );
+              }
+            }
+          }
         }
 
         // Reset for next loop iteration
