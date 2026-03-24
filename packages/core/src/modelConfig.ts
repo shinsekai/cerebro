@@ -2,10 +2,11 @@ import { z } from "zod";
 
 /**
  * All agent types that can be configured with specific models.
- * Includes the orchestrator and all 6 Tier 2 agents.
+ * Includes the orchestrator, lightweight model, and all 6 Tier 2 agents.
  */
 export const ModelAgentTypeSchema = z.enum([
   "orchestrator",
+  "lightweight",
   "frontend",
   "backend",
   "quality",
@@ -29,10 +30,11 @@ export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 
 /**
  * Default model assignments for each agent type.
- * Uses Opus for orchestrator (planning/coordination) and Sonnet for code-focused Tier 2 agents.
+ * Uses Opus for orchestrator (planning/coordination), Haiku for lightweight (simple tasks), and Sonnet for code-focused Tier 2 agents.
  */
 const DEFAULT_MODELS: Record<ModelAgentType, string> = {
   orchestrator: "claude-opus-4-6",
+  lightweight: "claude-haiku-4-5-20251001",
   frontend: "claude-sonnet-4-6",
   backend: "claude-sonnet-4-6",
   quality: "claude-sonnet-4-6",
@@ -47,6 +49,7 @@ const DEFAULT_MODELS: Record<ModelAgentType, string> = {
  */
 const ENV_VAR_MAPPING: Record<ModelAgentType, string> = {
   orchestrator: "CEREBRO_MODEL_ORCHESTRATOR",
+  lightweight: "CEREBRO_MODEL_LIGHTWEIGHT",
   frontend: "CEREBRO_MODEL_FRONTEND",
   backend: "CEREBRO_MODEL_BACKEND",
   quality: "CEREBRO_MODEL_QUALITY",
