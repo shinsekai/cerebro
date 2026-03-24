@@ -101,11 +101,11 @@ describe("Tier 2 Model Configuration", () => {
     it("should handle null/undefined environment values", () => {
       const defaultModel = "claude-sonnet-4-6";
 
-      let envModel: string | undefined;
+      let envModel: string | undefined | null;
       let selectedModel = envModel || defaultModel;
       expect(selectedModel).toBe(defaultModel);
 
-      envModel = null as any;
+      envModel = null;
       selectedModel = envModel || defaultModel;
       expect(selectedModel).toBe(defaultModel);
     });
@@ -122,7 +122,7 @@ describe("Tier 2 Model Configuration", () => {
 
     it("should not expose API key in configuration output", () => {
       const apiKey = "sk-ant-api-secret-key";
-      const maskedKey = apiKey.substring(0, 8) + "...";
+      const maskedKey = `${apiKey.substring(0, 8)}...`;
 
       expect(maskedKey).not.toBe(apiKey);
       expect(maskedKey).toContain("sk-ant");
