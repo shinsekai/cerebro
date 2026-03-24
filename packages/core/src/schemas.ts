@@ -77,3 +77,16 @@ export const ApprovalResponseSchema = z.object({
 });
 
 export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>;
+
+// --- Session State Schema ---
+
+export const SessionStateSchema = z.object({
+  sessionId: z.string().uuid(),
+  lastTicketId: z.string(),
+  lastTask: z.string(),
+  agentOutputs: z.record(z.string()),
+  fileChanges: z.array(z.string()),
+  timestamp: z.string().datetime(),
+});
+
+export type SessionState = z.infer<typeof SessionStateSchema>;
