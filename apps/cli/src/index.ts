@@ -352,6 +352,53 @@ async function main() {
     }
   }
 
+  if (action === "ops" && !taskDesc) {
+    taskDesc = (await select({
+      message: "Select infrastructure task:",
+      options: [
+        {
+          value:
+            "Generate Dockerfile and docker-compose.yml for the current project",
+          label: "Generate Dockerfile + docker-compose",
+        },
+        {
+          value:
+            "Generate GitHub Actions CI/CD pipeline for the current project",
+          label: "Generate CI/CD pipeline (GitHub Actions)",
+        },
+        {
+          value:
+            "Generate deployment configuration (Kubernetes manifests, Terraform, or cloud provider configs)",
+          label: "Generate deployment config",
+        },
+        {
+          value: "custom",
+          label: "Custom ops task",
+        },
+      ],
+    })) as string;
+
+    if (isCancel(taskDesc)) {
+      outro("Canceled.");
+      process.exit(0);
+    }
+
+    if (taskDesc === "custom") {
+      taskDesc = (await text({
+        message: "Describe the infrastructure task:",
+        placeholder: "e.g., Add nginx reverse proxy config",
+        validate: (value) => {
+          if (!value) return "Please provide a description.";
+        },
+      })) as string;
+
+      if (isCancel(taskDesc)) {
+        outro("Canceled.");
+        process.exit(0);
+      }
+    }
+  }
+
   const s = spinner();
   s.start(`Starting cerebro ${action}...`);
 

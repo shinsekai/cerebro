@@ -228,21 +228,45 @@ app.post("/mesh/loop", async (c) => {
 
       const orchestrator = new OrchestratorAgent();
       const mode = (body as any).mode || "develop";
-      await pushLog(
-        `[Tier 1 Orchestrator] Analyzing request and planning constraints (mode: ${mode})...`,
-        color.magenta,
-      );
-      const plan: any = await orchestrator.planExecution(
-        ticket.task,
-        mode as "develop" | "fix" | "review" | "ops",
-      );
-      const orchestratorTokenDetails = extractTokenDetails(plan.raw);
-      orchestratorTokens += orchestratorTokenDetails.totalTokens;
-      orchestratorCost += orchestratorTokenDetails.cost;
-      await pushLog(
-        `[Tier 1 Orchestrator] Plan generated successfully. (${orchestratorTokenDetails.totalTokens} tokens, ${formatCost(orchestratorTokenDetails.cost)})`,
-        color.green,
-      );
+      let plan: any;
+
+      // Ops mode: skip orchestrator, create direct plan for ops agent only
+      if (mode === "ops") {
+        await pushLog(
+          `[Ops Mode] Bypassing orchestrator - direct ops agent dispatch...`,
+          color.magenta,
+        );
+        plan = {
+          content: {
+            summary: "Infrastructure and DevOps task",
+            steps: [
+              {
+                agent: "ops",
+                description: ticket.task,
+                depends_on: [],
+              },
+            ],
+          },
+          raw: null, // No orchestrator usage
+        };
+        // No orchestrator tokens for ops mode
+      } else {
+        await pushLog(
+          `[Tier 1 Orchestrator] Analyzing request and planning constraints (mode: ${mode})...`,
+          color.magenta,
+        );
+        plan = await orchestrator.planExecution(
+          ticket.task,
+          mode as "develop" | "fix" | "review" | "ops",
+        );
+        const orchestratorTokenDetails = extractTokenDetails(plan.raw);
+        orchestratorTokens += orchestratorTokenDetails.totalTokens;
+        orchestratorCost += orchestratorTokenDetails.cost;
+        await pushLog(
+          `[Tier 1 Orchestrator] Plan generated successfully. (${orchestratorTokenDetails.totalTokens} tokens, ${formatCost(orchestratorTokenDetails.cost)})`,
+          color.green,
+        );
+      }
 
       ticket.status = "in-progress";
       await saveStateTicket(ticket);

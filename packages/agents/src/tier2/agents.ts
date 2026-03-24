@@ -235,6 +235,8 @@ export const agenticOpsAgent: AgenticAgent = createAgenticAgent(
   TOOLS: Use read_file to examine existing configs, write_file to create/update Dockerfiles and CI configs, run_command to validate builds.
   `,
   `VERIFY BEFORE task_complete:
+- CRITICAL: Use read_file to check existing infrastructure files BEFORE generating new ones: Dockerfile, docker-compose.yml, .github/workflows/*, k8s/*, terraform/*, Dockerfile.*, *dockerfile
+- Detect actual tech stack (e.g., Bun not Node, Hono not Express) and generate configs accordingly
 - Use read_file to verify the content of all generated configuration files (Dockerfile, docker-compose.yml, CI/CD configs, kubernetes manifests).
 - Check that all referenced paths, file names, and service names actually exist or are correctly defined.
 - If applicable, run_command to validate the configuration (e.g., docker build for Dockerfiles, kubectl apply --dry-run for Kubernetes, terraform validate for Terraform).
