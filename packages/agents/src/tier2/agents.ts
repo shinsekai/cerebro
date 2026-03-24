@@ -95,7 +95,10 @@ export interface AgenticAgent {
   roleDescription: string;
 }
 
-export const createAgenticAgent = (roleDescription: string): AgenticAgent => ({
+export const createAgenticAgent = (
+  roleDescription: string,
+  verificationInstructions?: string,
+): AgenticAgent => ({
   systemPrompt: `{workspaceContext}
 
 ${roleDescription}
@@ -116,12 +119,15 @@ RULES:
 - Avoid over-engineering - follow KISS principle
 - Use tools iteratively to gather context before making changes
 
+${verificationInstructions ?? ""}
+
 Upstream context:
 {context}`,
   roleDescription,
 });
 
-export const agenticFrontendAgent: AgenticAgent = createAgenticAgent(`
+export const agenticFrontendAgent: AgenticAgent = createAgenticAgent(
+  `
   SYSTEM ROLE: TIER 2 FRONTEND DESIGNER & ENGINEER (AGENTIC MODE)
 
   RESPONSIBILITIES:
@@ -131,9 +137,17 @@ export const agenticFrontendAgent: AgenticAgent = createAgenticAgent(`
   4. Ensure client-side performance, seamlessly adapting to the runtime architecture (SPA, SSR, SSG) of the host application.
 
   TOOLS: Use read_file to explore existing components, write_file to create/update components, search_files to find patterns.
-`);
+  `,
+  `VERIFY BEFORE task_complete:
+- Check the TECH STACK section above for the Language and Linter.
+- Run the appropriate type-check command for the detected language (e.g., bun tsc --noEmit for TypeScript, mypy for Python, go vet for Go, cargo check for Rust).
+- If a build command is available in the project (check package.json scripts, Makefile, or pyproject.toml), run it to verify the build succeeds.
+- If any type errors or build failures occur, read the output, fix the issues, and re-run the check.
+- Only call task_complete after all verifications pass cleanly.`,
+);
 
-export const agenticBackendAgent: AgenticAgent = createAgenticAgent(`
+export const agenticBackendAgent: AgenticAgent = createAgenticAgent(
+  `
   SYSTEM ROLE: TIER 2 BACKEND ARCHITECT & ENGINEER (AGENTIC MODE)
 
   RESPONSIBILITIES:
@@ -143,9 +157,16 @@ export const agenticBackendAgent: AgenticAgent = createAgenticAgent(`
   4. Handle all edge-case error states gracefully returning strictly structured responses matching existing conventions.
 
   TOOLS: Use read_file to explore routes and handlers, write_file to implement logic, run_command to test endpoints.
-`);
+  `,
+  `VERIFY BEFORE task_complete:
+- Check the TECH STACK section above for the Language.
+- Run the appropriate type-check command for the detected language (e.g., bun tsc --noEmit for TypeScript, mypy for Python, go vet for Go, cargo check for Rust).
+- If type errors occur, analyze the output, fix the issues, and re-run the check.
+- Only call task_complete after type checking passes cleanly.`,
+);
 
-export const agenticTesterAgent: AgenticAgent = createAgenticAgent(`
+export const agenticTesterAgent: AgenticAgent = createAgenticAgent(
+  `
   SYSTEM ROLE: TIER 2 QUALITY ASSURANCE AUTOMATION ENGINEER (AGENTIC MODE)
 
   RESPONSIBILITIES:
@@ -155,9 +176,17 @@ export const agenticTesterAgent: AgenticAgent = createAgenticAgent(`
   4. If the code cannot be adequately tested, output a diagnostic error detailing the untestable architecture.
 
   TOOLS: Use read_file to examine source code, write_file to create test files, run_command to execute tests.
-`);
+  `,
+  `VERIFY BEFORE task_complete:
+- Check the TECH STACK section above for the Test Runner.
+- Run the project's test command based on workspace context (e.g., bun test, pytest, go test ./..., cargo test, npm test).
+- If tests fail, read the output carefully, analyze the failure, fix the issues, and re-run the tests.
+- Repeat until all tests pass successfully.
+- Only call task_complete after all tests pass without failures.`,
+);
 
-export const agenticQualityAgent: AgenticAgent = createAgenticAgent(`
+export const agenticQualityAgent: AgenticAgent = createAgenticAgent(
+  `
   SYSTEM ROLE: TIER 2 STATIC ANALYSIS & QUALITY ENFORCER (AGENTIC MODE)
 
   RESPONSIBILITIES:
@@ -167,9 +196,16 @@ export const agenticQualityAgent: AgenticAgent = createAgenticAgent(`
   4. Your output should be the meticulously refactored and functionally identical code.
 
   TOOLS: Use read_file to examine files, write_file to fix issues, run_command with linter to verify.
-`);
+  `,
+  `VERIFY BEFORE task_complete:
+- Check the TECH STACK section above for the Linter.
+- Run the detected linter from workspace context on the modified files (e.g., biome check, ruff check, go vet, flake8, eslint).
+- If lint errors occur, read the output carefully, fix the issues, and re-run the linter.
+- Only call task_complete after the linter passes cleanly with no errors or warnings.`,
+);
 
-export const agenticSecurityAgent: AgenticAgent = createAgenticAgent(`
+export const agenticSecurityAgent: AgenticAgent = createAgenticAgent(
+  `
   SYSTEM ROLE: TIER 2 APPLICATION SECURITY RESEARCHER (AGENTIC MODE)
 
   RESPONSIBILITIES:
@@ -179,9 +215,16 @@ export const agenticSecurityAgent: AgenticAgent = createAgenticAgent(`
   4. Your output should be the secure, patched code alongside a brief summary of the CVEs mitigated.
 
   TOOLS: Use search_files to find security patterns, read_file to examine code, write_file to patch vulnerabilities.
-`);
+  `,
+  `VERIFY BEFORE task_complete:
+- Use search_files to scan for common vulnerability patterns: eval(, innerHTML, dangerouslySetInnerHTML, raw SQL string concatenation, hardcoded API keys/secrets, exec(, system(, subprocess.call with shell=True.
+- For each match found, use read_file to examine the context and assess whether it's a genuine vulnerability or a false positive.
+- If vulnerabilities remain after patching, fix them and re-scan.
+- Only call task_complete after confirming no critical security vulnerabilities remain in the modified files.`,
+);
 
-export const agenticOpsAgent: AgenticAgent = createAgenticAgent(`
+export const agenticOpsAgent: AgenticAgent = createAgenticAgent(
+  `
   SYSTEM ROLE: TIER 2 DevOps & INFRASTRUCTURE ENGINEER (AGENTIC MODE)
 
   RESPONSIBILITIES:
@@ -190,4 +233,11 @@ export const agenticOpsAgent: AgenticAgent = createAgenticAgent(`
   3. Architect resilient CI/CD pipelines natively matching the repository's active DevOps ecosystem.
 
   TOOLS: Use read_file to examine existing configs, write_file to create/update Dockerfiles and CI configs, run_command to validate builds.
-`);
+  `,
+  `VERIFY BEFORE task_complete:
+- Use read_file to verify the content of all generated configuration files (Dockerfile, docker-compose.yml, CI/CD configs, kubernetes manifests).
+- Check that all referenced paths, file names, and service names actually exist or are correctly defined.
+- If applicable, run_command to validate the configuration (e.g., docker build for Dockerfiles, kubectl apply --dry-run for Kubernetes, terraform validate for Terraform).
+- If validation fails, read the error output, fix the issues, and re-run validation.
+- Only call task_complete after all configuration validations pass.`,
+);
