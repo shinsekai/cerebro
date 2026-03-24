@@ -2,6 +2,233 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { FileChange } from "@cerebro/core";
 
+/**
+ * Unified diff implementation using LCS (Longest Common Subsequence)
+ */
+
+interface DiffChunk {
+  type: "same" | "add" | "remove";
+  text: string[];
+}
+
+function computeLCS(oldLines: string[], newLines: string[]): number[][] {
+  const m = oldLines.length;
+  const n = newLines.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    Array(n + 1).fill(0),
+  );
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  return dp;
+}
+
+function backtrackLCS(
+  dp: number[][],
+  oldLines: string[],
+  newLines: string[],
+  i: number,
+  j: number,
+  chunks: DiffChunk[],
+): void {
+  if (i === 0 && j === 0) {
+    return;
+  }
+
+  if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+    backtrackLCS(dp, oldLines, newLines, i - 1, j - 1, chunks);
+    if (chunks.length > 0 && chunks[chunks.length - 1].type === "same") {
+      chunks[chunks.length - 1].text.push(oldLines[i - 1]);
+    } else {
+      chunks.push({ type: "same", text: [oldLines[i - 1]] });
+    }
+  } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+    backtrackLCS(dp, oldLines, newLines, i, j - 1, chunks);
+    if (chunks.length > 0 && chunks[chunks.length - 1].type === "add") {
+      chunks[chunks.length - 1].text.push(newLines[j - 1]);
+    } else {
+      chunks.push({ type: "add", text: [newLines[j - 1]] });
+    }
+  } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+    backtrackLCS(dp, oldLines, newLines, i - 1, j, chunks);
+    if (chunks.length > 0 && chunks[chunks.length - 1].type === "remove") {
+      chunks[chunks.length - 1].text.push(oldLines[i - 1]);
+    } else {
+      chunks.push({ type: "remove", text: [oldLines[i - 1]] });
+    }
+  }
+}
+
+function formatUnifiedDiff(chunks: DiffChunk[], filePath: string): string {
+  const lines: string[] = [];
+  const contextLines = 3;
+
+  // Group adjacent same/add/remove chunks into hunks
+  const hunks: {
+    oldStart: number;
+    newStart: number;
+    oldCount: number;
+    newCount: number;
+    chunks: DiffChunk[];
+  }[] = [];
+
+  let oldLine = 1;
+  let newLine = 1;
+  let currentHunk: {
+    oldStart: number;
+    newStart: number;
+    oldCount: number;
+    newCount: number;
+    chunks: DiffChunk[];
+  } | null = null;
+
+  for (const chunk of chunks) {
+    if (chunk.type === "same") {
+      oldLine += chunk.text.length;
+      newLine += chunk.text.length;
+
+      // If we have a current hunk and this "same" chunk provides enough context, close it
+      if (
+        currentHunk &&
+        (currentHunk.chunks[currentHunk.chunks.length - 1].type !== "same" ||
+          chunk.text.length > contextLines * 2)
+      ) {
+        // Keep context lines from the end of the "same" chunk
+        if (chunk.text.length > contextLines) {
+          currentHunk.chunks.push({
+            type: "same",
+            text: chunk.text.slice(-contextLines),
+          });
+          oldLine -= chunk.text.length - contextLines;
+          newLine -= chunk.text.length - contextLines;
+        }
+        hunks.push(currentHunk);
+        currentHunk = null;
+      } else if (currentHunk) {
+        // Include context lines in the hunk
+        const contextToKeep = Math.min(contextLines, chunk.text.length);
+        currentHunk.chunks.push({
+          type: "same",
+          text: chunk.text.slice(0, contextToKeep),
+        });
+      }
+    } else {
+      // add or remove - start a new hunk if needed
+      if (!currentHunk) {
+        // Include context lines from previous "same" chunk
+        const contextStart = Math.max(0, oldLine - contextLines);
+        const contextEnd = oldLine - contextStart;
+        currentHunk = {
+          oldStart: contextStart + 1,
+          newStart: Math.max(0, newLine - contextLines) + 1,
+          oldCount: contextEnd,
+          newCount:
+            Math.max(0, newLine - contextLines) +
+            newLine -
+            Math.max(0, newLine - contextLines) -
+            contextEnd,
+          chunks: [],
+        };
+        if (contextEnd > 0) {
+          currentHunk.chunks.push({
+            type: "same",
+            text: Array.from({ length: contextEnd }, () => "..."),
+          });
+        }
+      }
+
+      currentHunk.chunks.push(chunk);
+
+      if (chunk.type === "add") {
+        newLine += chunk.text.length;
+      } else {
+        oldLine += chunk.text.length;
+      }
+    }
+  }
+
+  // Close any remaining hunk
+  if (currentHunk) {
+    hunks.push(currentHunk);
+  }
+
+  // Format hunks
+  for (const hunk of hunks) {
+    let oldCount = 0;
+    let newCount = 0;
+
+    for (const chunk of hunk.chunks) {
+      if (chunk.type === "add") {
+        newCount += chunk.text.length;
+      } else if (chunk.type === "remove") {
+        oldCount += chunk.text.length;
+      } else if (chunk.type === "same" && chunk.text[0] !== "...") {
+        oldCount += chunk.text.length;
+        newCount += chunk.text.length;
+      }
+    }
+
+    lines.push(
+      `@@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@`,
+    );
+
+    for (const chunk of hunk.chunks) {
+      if (chunk.type === "same") {
+        if (chunk.text[0] === "...") {
+          continue;
+        }
+        for (const line of chunk.text) {
+          lines.push(` ${line}`);
+        }
+      } else if (chunk.type === "add") {
+        for (const line of chunk.text) {
+          lines.push(`+${line}`);
+        }
+      } else if (chunk.type === "remove") {
+        for (const line of chunk.text) {
+          lines.push(`-${line}`);
+        }
+      }
+    }
+  }
+
+  if (lines.length === 0) {
+    return "";
+  }
+
+  return `--- a/${filePath}\n+++ b/${filePath}\n${lines.join("\n")}`;
+}
+
+function computeUnifiedDiff(
+  oldContent: string,
+  newContent: string,
+  filePath: string,
+): string {
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+
+  const dp = computeLCS(oldLines, newLines);
+  const chunks: DiffChunk[] = [];
+  backtrackLCS(
+    dp,
+    oldLines,
+    newLines,
+    oldLines.length,
+    newLines.length,
+    chunks,
+  );
+
+  return formatUnifiedDiff(chunks, filePath);
+}
+
 const DEFAULT_ALLOWED_COMMANDS = [
   // JS/TS
   "bun",
@@ -340,13 +567,17 @@ export class ToolExecutor {
       const relativePath = path.relative(this.workspaceRoot, safePath);
       let operation: "create" | "update" = "create";
       let isNew = true;
+      let diff: string | undefined;
 
       try {
-        await fs.access(safePath);
+        const oldContent = await fs.readFile(safePath, "utf-8");
         operation = "update";
         isNew = false;
+        // Compute unified diff for updates
+        diff = computeUnifiedDiff(oldContent, input.content, relativePath);
       } catch {
         isNew = true;
+        // No diff for creates (whole file is new)
       }
 
       // Store in pending writes - DO NOT write to disk
@@ -355,6 +586,7 @@ export class ToolExecutor {
         content: input.content,
         operation,
         isNew,
+        diff,
       };
 
       this.pendingWrites.set(relativePath, fileChange);
