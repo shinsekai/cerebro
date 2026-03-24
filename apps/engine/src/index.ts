@@ -17,6 +17,7 @@ import {
 } from "@cerebro/agents";
 import {
   buildExecutionWaves,
+  getDownstreamAgents,
   type ApprovalResponse,
   ApprovalResponseSchema,
   CircuitBreaker,
@@ -278,6 +279,11 @@ app.post("/mesh/loop", async (c) => {
       const agentOutputs: Record<string, string> = {};
       const allFileChanges: FileChange[] = [];
 
+      // Track failed and skipped agents across all waves
+      const failedAgents: Array<{ agent: string; error: string }> = [];
+      const skippedAgents: Array<{ agent: string; reason: string }> = [];
+      const processedAgents = new Set<string>();
+
       while (CircuitBreaker.check(ticket)) {
         try {
           await pushLog(
@@ -400,6 +406,7 @@ app.post("/mesh/loop", async (c) => {
                 const { agent, output, fileChanges, tokenDetails } = r.value;
                 agentOutputs[agent] = output;
                 allFileChanges.push(...fileChanges);
+                processedAgents.add(agent);
 
                 // Track tokens per agent
                 switch (agent) {
@@ -437,6 +444,34 @@ app.post("/mesh/loop", async (c) => {
                   `[Wave ${wi + 1}] Agent failed: ${reason}`,
                   color.red,
                 );
+                // Find which agent failed from the wave
+                const failedStep = wave[results.indexOf(r)];
+                if (failedStep) {
+                  failedAgents.push({ agent: failedStep.agent, error: reason });
+                }
+              }
+            }
+
+            // Handle partial failures: mark downstream agents as skipped
+            for (const failed of failedAgents) {
+              const downstream = getDownstreamAgents(
+                plan.content,
+                failed.agent,
+              );
+              for (const downstreamAgent of downstream) {
+                // Skip if already processed or already skipped
+                if (processedAgents.has(downstreamAgent)) continue;
+                if (skippedAgents.some((s) => s.agent === downstreamAgent))
+                  continue;
+
+                await pushLog(
+                  `[Control Plane] Skipping ${downstreamAgent} — dependency ${failed.agent} failed`,
+                  color.yellow,
+                );
+                skippedAgents.push({
+                  agent: downstreamAgent,
+                  reason: `depends on ${failed.agent} which failed`,
+                });
               }
             }
           }
@@ -605,7 +640,14 @@ app.post("/mesh/loop", async (c) => {
           };
           await stream.writeSSE({
             event: "done",
-            data: JSON.stringify({ success: true, ticket, usage: tokenUsage }),
+            data: JSON.stringify({
+              success: true,
+              partial: failedAgents.length > 0,
+              failedAgents,
+              skippedAgents,
+              ticket,
+              usage: tokenUsage,
+            }),
           });
           break;
         } catch (agentError: any) {
