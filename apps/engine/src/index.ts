@@ -227,11 +227,15 @@ app.post("/mesh/loop", async (c) => {
       }
 
       const orchestrator = new OrchestratorAgent();
+      const mode = (body as any).mode || "develop";
       await pushLog(
-        `[Tier 1 Orchestrator] Analyzing request and planning constraints...`,
+        `[Tier 1 Orchestrator] Analyzing request and planning constraints (mode: ${mode})...`,
         color.magenta,
       );
-      const plan: any = await orchestrator.planExecution(ticket.task);
+      const plan: any = await orchestrator.planExecution(
+        ticket.task,
+        mode as "develop" | "fix" | "review" | "ops",
+      );
       const orchestratorTokenDetails = extractTokenDetails(plan.raw);
       orchestratorTokens += orchestratorTokenDetails.totalTokens;
       orchestratorCost += orchestratorTokenDetails.cost;

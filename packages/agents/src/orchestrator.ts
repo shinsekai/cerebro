@@ -21,8 +21,51 @@ export class OrchestratorAgent {
    */
   public async planExecution(
     taskDesc: string,
+    mode: "develop" | "fix" | "review" | "ops" = "develop",
   ): Promise<{ content: ExecutionPlan; raw: any }> {
-    const prompt = PromptTemplate.fromTemplate(`
+    // Different prompts based on mode
+    const getSystemPrompt = () => {
+      if (mode === "fix") {
+        return PromptTemplate.fromTemplate(`
+      You are the Cerebro Orchestrator in FIX mode. The user reported a bug.
+      Identify affected files, dispatch minimum agents to diagnose and fix.
+      Always include tester to verify.
+
+      AVAILABLE AGENTS:
+      - frontend: For UI components, styling, client-side code
+      - backend: For API endpoints, server logic, database operations
+      - quality: For code formatting, AST analysis, linting
+      - security: For OWASP vulnerability scanning, input validation
+      - tester: For unit tests, integration tests, test coverage
+      - ops: For DevOps, infrastructure, CI/CD, Docker, Justfile, Makefile
+
+      BUG DESCRIPTION: {taskDesc}
+
+      OUTPUT STRICT JSON (no markdown, no explanation):
+      {{
+        "summary": "Brief description of the fix plan",
+        "steps": [
+          {{
+            "agent": "backend",
+            "description": "What this agent will do",
+            "depends_on": []
+          }}
+        ]
+      }}
+
+      Fix mode rules:
+      - Analyze error/stack trace to identify problem area
+      - Dispatch MINIMUM agents needed for targeted fix
+      - Runtime error → backend, tester
+      - UI bug → frontend, tester
+      - Type error → backend/frontend, quality, tester
+      - Security issue → backend/frontend, security, tester
+      - Always include tester to verify fix
+    `);
+      }
+
+      // Default develop mode prompt
+      return PromptTemplate.fromTemplate(`
       You are the Cerebro Orchestrator (Tier 1). You are the CONTROL PLANE.
       Your job is to analyze the user request and determine which Tier 2 agents need to execute.
       You DO NOT write code. You only orchestrate agent execution.
@@ -57,6 +100,9 @@ export class OrchestratorAgent {
       - For UI work: frontend → quality → tester
       - For full-stack: backend → frontend → quality → security → tester
     `);
+    };
+
+    const prompt = getSystemPrompt();
 
     const chain = prompt.pipe(this.model as any);
     const rawResult = await chain.invoke({ taskDesc });
