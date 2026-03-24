@@ -4,6 +4,10 @@ An **Enterprise Multi-Agent Orchestration Platform & Developer CLI**.
 
 Cerebro bridges the gap between local development workflows and cloud infrastructure orchestration. It is a blazingly fast, multi-tier agentic system that writes, tests, and reviews code autonomously natively on your codebase while strictly enforcing KISS, DRY, and SOLID principles.
 
+## 🧠 Architecture
+
+![Cerebro Architecture](./doc/architecture.svg)
+
 ## 🧠 Architecture Overview
 
 Cerebro runs heavily decoupled across a **2-Tier AI Mesh Architecture**:
