@@ -1,3 +1,4 @@
+import { type CerebroEvent, Logger } from "@cerebro/core";
 import {
   confirm,
   intro,
@@ -8,11 +9,6 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
-import {
-  type CerebroEvent,
-  Logger,
-  type ReviewResultEvent,
-} from "@cerebro/core";
 
 /**
  * Render a colored unified diff line
@@ -149,6 +145,122 @@ async function clearSession(workspaceRoot: string): Promise<void> {
   }
 }
 
+// --- Execution Log Functions ---
+
+const LOGS_DIR = ".cerebro/logs";
+
+interface LogEntry {
+  type: string;
+  data?: any;
+  timestamp?: number;
+  ticketId?: string;
+  [key: string]: any;
+}
+
+interface LogMetadata {
+  ticketId: string;
+  task: string;
+  timestamp: string;
+}
+
+async function ensureLogsDir(workspaceRoot: string): Promise<void> {
+  const logsPath = path.join(workspaceRoot, LOGS_DIR);
+  await fs.mkdir(logsPath, { recursive: true });
+}
+
+async function writeLogEntry(
+  workspaceRoot: string,
+  ticketId: string,
+  entry: LogEntry,
+): Promise<void> {
+  const logsPath = path.join(workspaceRoot, LOGS_DIR);
+  const logFile = path.join(logsPath, `${ticketId}.jsonl`);
+  await fs.mkdir(logsPath, { recursive: true });
+
+  const entryWithTimestamp = {
+    ...entry,
+    timestamp: Date.now(),
+    ticketId,
+  };
+
+  const line = `${JSON.stringify(entryWithTimestamp)}\n`;
+  await fs.appendFile(logFile, line, "utf-8");
+}
+
+async function listLogs(workspaceRoot: string): Promise<LogMetadata[]> {
+  const logsPath = path.join(workspaceRoot, LOGS_DIR);
+  try {
+    await fs.access(logsPath);
+  } catch {
+    return []; // Logs directory doesn't exist
+  }
+
+  const entries = await fs.readdir(logsPath, { withFileTypes: true });
+  const logs: LogMetadata[] = [];
+
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      const ticketId = entry.name.slice(0, -6); // Remove .jsonl
+      const logFile = path.join(logsPath, entry.name);
+
+      try {
+        const content = await fs.readFile(logFile, "utf-8");
+        const lines = content.trim().split("\n");
+
+        if (lines.length > 0) {
+          const firstEntry = JSON.parse(lines[0]) as LogEntry;
+          const timestamp = firstEntry.timestamp
+            ? new Date(firstEntry.timestamp).toISOString()
+            : new Date().toISOString();
+
+          // Try to find the task from any 'done' or start event
+          let task = "Unknown task";
+          for (const line of lines) {
+            try {
+              const e = JSON.parse(line) as LogEntry;
+              if (e.type === "done" && e.data?.ticket?.task) {
+                task = e.data.ticket.task;
+                break;
+              }
+            } catch {}
+          }
+
+          logs.push({
+            ticketId,
+            task,
+            timestamp,
+          });
+        }
+      } catch {
+        // Skip malformed log files
+      }
+    }
+  }
+
+  // Sort by timestamp, newest first
+  logs.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
+
+  return logs;
+}
+
+async function readLogLines(
+  workspaceRoot: string,
+  ticketId: string,
+): Promise<LogEntry[]> {
+  const logFile = path.join(workspaceRoot, LOGS_DIR, `${ticketId}.jsonl`);
+  try {
+    const content = await fs.readFile(logFile, "utf-8");
+    return content
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as LogEntry);
+  } catch {
+    return [];
+  }
+}
+
 // --- Typed SSE Event Handlers ---
 
 /**
@@ -206,6 +318,7 @@ async function streamEngineResponse(payload: {
   body: object;
   spinner: ReturnType<typeof spinner>;
   onReviewResult?: (data: any) => void;
+  workspaceRoot?: string;
 }): Promise<{ success: boolean; data: any }> {
   const res = await fetch(payload.url, {
     method: "POST",
@@ -219,6 +332,13 @@ async function streamEngineResponse(payload: {
   const decoder = new TextDecoder();
   let done = false;
   let finalData: any = null;
+  let ticketId: string | undefined;
+
+  // Start logging if workspace root provided
+  if (payload.workspaceRoot && "id" in payload.body) {
+    ticketId = String((payload.body as any).id);
+    await ensureLogsDir(payload.workspaceRoot);
+  }
 
   // SSE state machine — accumulate per-event block, parse on blank separator
   let currentEvent = "message";
@@ -248,9 +368,10 @@ async function streamEngineResponse(payload: {
 
             // Try to parse as typed event first
             let handledAsTyped = false;
+            let eventData: any = null;
             if (currentEvent !== "message") {
               try {
-                const eventData = JSON.parse(fullData);
+                eventData = JSON.parse(fullData);
                 // Check if it's a CerebroEvent by checking for 'type' field
                 if (
                   eventData &&
@@ -263,6 +384,14 @@ async function streamEngineResponse(payload: {
                     payload.onReviewResult,
                   );
                   handledAsTyped = true;
+
+                  // Log typed event
+                  if (payload.workspaceRoot && ticketId) {
+                    await writeLogEntry(payload.workspaceRoot, ticketId, {
+                      type: currentEvent,
+                      data: eventData,
+                    });
+                  }
                 }
               } catch {
                 // Not a typed event or malformed JSON, fall through to legacy handlers
@@ -283,12 +412,28 @@ async function streamEngineResponse(payload: {
                   error: "Malformed response from Engine.",
                 };
               }
+
+              // Log final event
+              if (payload.workspaceRoot && ticketId) {
+                await writeLogEntry(payload.workspaceRoot, ticketId, {
+                  type: currentEvent,
+                  data: finalData,
+                });
+              }
             } else if (!handledAsTyped && currentEvent === "review_result") {
               // Handle review result
               if (payload.onReviewResult) {
                 try {
                   const reviewData = JSON.parse(fullData);
                   payload.onReviewResult(reviewData);
+
+                  // Log review result
+                  if (payload.workspaceRoot && ticketId) {
+                    await writeLogEntry(payload.workspaceRoot, ticketId, {
+                      type: "review_result",
+                      data: reviewData,
+                    });
+                  }
                 } catch (error) {
                   log.error(`Error processing review result: ${error}`);
                 }
@@ -297,6 +442,14 @@ async function streamEngineResponse(payload: {
               // Handle approval request
               try {
                 const approvalData = JSON.parse(fullData);
+
+                // Log approval request
+                if (payload.workspaceRoot && ticketId) {
+                  await writeLogEntry(payload.workspaceRoot, ticketId, {
+                    type: "approval_request",
+                    data: approvalData,
+                  });
+                }
                 payload.spinner.stop(
                   color.yellow(`⏸ Paused: Awaiting file approval...`),
                 );
@@ -519,13 +672,20 @@ async function main() {
       `  ${color.cyan("chat")}                Open persistent REPL for iterative development`,
     );
     console.log(
+      `  ${color.cyan("logs")}                List recent execution logs`,
+    );
+    console.log(
+      `  ${color.cyan("replay")} <id>        Replay a past execution log`,
+    );
+    console.log(
       `  ${color.cyan("help")}                Show this interactive help message\n`,
     );
     console.log(`${color.bold("Options:")}`);
     console.log(`  -h, --help        Show this help menu`);
     console.log(
-      `  --new-session      Force a fresh session (ignore existing context)\n`,
+      `  --new-session      Force a fresh session (ignore existing context)`,
     );
+    console.log(`  --fast             Instant replay (no simulated delays)\n`);
     process.exit(0);
   }
 
@@ -765,6 +925,7 @@ async function main() {
         taskDesc = null;
         continue;
       }
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: case exits via process.exit()
       case "chat": {
         const workspaceRoot = await findWorkspaceRoot(cwd());
         const sessionHistory: Array<{
@@ -846,6 +1007,7 @@ async function main() {
                     : undefined,
               },
               spinner: s,
+              workspaceRoot,
             });
 
             if (success) {
@@ -944,6 +1106,7 @@ async function main() {
           }
         }
       }
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: case exits via process.exit()
       case "develop":
       case "fix":
         {
@@ -1005,6 +1168,7 @@ async function main() {
                     : undefined,
               },
               spinner: s,
+              workspaceRoot,
             });
 
             if (success) {
@@ -1235,6 +1399,7 @@ async function main() {
               reviewTarget,
             },
             spinner: reviewSpinner,
+            workspaceRoot,
             onReviewResult: (reviewData) => {
               reviewSpinner.stop("Analysis complete");
               console.log(
@@ -1342,6 +1507,7 @@ async function main() {
         break;
       case "ops":
         try {
+          const opsWorkspaceRoot = await findWorkspaceRoot(cwd());
           const { success, data: finalData } = await streamEngineResponse({
             url: "http://localhost:8080/mesh/loop",
             body: {
@@ -1349,10 +1515,11 @@ async function main() {
               task: taskDesc,
               retry_count: 0,
               status: "pending",
-              workspaceRoot: await findWorkspaceRoot(cwd()),
+              workspaceRoot: opsWorkspaceRoot,
               mode: "ops",
             },
             spinner: s,
+            workspaceRoot: opsWorkspaceRoot,
           });
 
           if (success) {
@@ -1451,6 +1618,163 @@ async function main() {
           );
         }
         break;
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: case exits via process.exit()
+      case "logs": {
+        s.stop();
+        const workspaceRoot = await findWorkspaceRoot(cwd());
+        const logs = await listLogs(workspaceRoot);
+
+        if (logs.length === 0) {
+          console.log(color.yellow("⚠ No execution logs found."));
+          console.log(
+            color.dim(
+              "Run a command first (e.g., 'cerebro develop ...') to create logs.",
+            ),
+          );
+          process.exit(0);
+        }
+
+        console.log(color.bold(`\nRecent Executions (${logs.length})\n`));
+
+        for (let i = 0; i < logs.length; i++) {
+          const log = logs[i];
+          const date = new Date(log.timestamp).toLocaleString();
+          const shortId = log.ticketId.slice(0, 8);
+
+          console.log(
+            `${color.cyan(`${i + 1}.`)} ${color.magenta(shortId)} ${color.dim(date)}`,
+          );
+          console.log(
+            `   ${color.gray(log.task.length > 60 ? log.task.slice(0, 60) + "..." : log.task)}`,
+          );
+          console.log(`   ${color.dim(`cerebro replay ${log.ticketId}`)}\n`);
+        }
+
+        process.exit(0);
+      }
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: case exits via process.exit()
+      case "replay": {
+        s.stop();
+        const ticketId = taskDesc?.trim();
+
+        if (!ticketId) {
+          console.log(color.red("✖ Ticket ID is required."));
+          console.log(color.dim("Usage: cerebro replay <ticket-id>"));
+          console.log(
+            color.dim("Use 'cerebro logs' to list available ticket IDs."),
+          );
+          process.exit(1);
+        }
+
+        const workspaceRoot = await findWorkspaceRoot(cwd());
+        const logEntries = await readLogLines(workspaceRoot, ticketId);
+
+        if (logEntries.length === 0) {
+          console.log(color.red(`✖ No log found for ticket ID: ${ticketId}`));
+          process.exit(1);
+        }
+
+        console.log(
+          color.bold(`\n${color.bgMagenta(color.black(" Replay Execution "))}`),
+        );
+        console.log(color.dim(`Ticket ID: ${ticketId}\n`));
+
+        // Check for --fast flag for instant replay
+        const { values: replayValues } = parseArgs({
+          args: process.argv.slice(2),
+          allowPositionals: true,
+          strict: false,
+        });
+        const fastReplay = replayValues["fast"] as boolean;
+
+        let currentTask = "Unknown task";
+
+        for (const entry of logEntries) {
+          const time = entry.timestamp
+            ? new Date(entry.timestamp).toLocaleTimeString()
+            : "unknown";
+          const typeColor = color.magenta;
+          const typeLabel = color.dim(`[${entry.type}]`);
+
+          console.log(
+            `${color.dim(time)} ${typeColor(entry.type)} ${typeLabel}`,
+          );
+
+          if (entry.type === "done" && entry.data?.ticket?.task) {
+            currentTask = entry.data.ticket.task;
+          }
+
+          if (entry.type === "done") {
+            // Show completion summary
+            if (entry.data?.success) {
+              console.log(color.green(`  ✔ Completed successfully`));
+            } else if (entry.data?.partial) {
+              console.log(color.yellow(`  ⚠ Completed with partial failures`));
+            } else {
+              console.log(
+                color.red(
+                  `  ✖ Failed: ${entry.data?.error || "Unknown error"}`,
+                ),
+              );
+            }
+
+            if (entry.data?.usage) {
+              const u = entry.data.usage;
+              console.log(
+                color.dim(`    Total tokens: ${u.total?.tokens || 0}`),
+              );
+            }
+          } else if (entry.type === "agent_started") {
+            console.log(
+              color.cyan(
+                `  → ${entry.data?.agent}: ${entry.data?.description}`,
+              ),
+            );
+          } else if (entry.type === "agent_completed") {
+            console.log(
+              color.green(
+                `  ✔ ${entry.data?.agent} completed (${entry.data?.tokens} tokens)`,
+              ),
+            );
+          } else if (entry.type === "agent_failed") {
+            console.log(
+              color.red(
+                `  ✖ ${entry.data?.agent} failed: ${entry.data?.error}`,
+              ),
+            );
+          } else if (entry.type === "tool_call") {
+            console.log(
+              color.dim(
+                `    [Tool] ${entry.data?.tool}(${entry.data?.input?.slice(0, 50)}...)`,
+              ),
+            );
+          } else if (entry.type === "approval_request") {
+            console.log(
+              color.yellow(
+                `  ⏸ Approval requested: ${entry.data?.summary?.slice(0, 50)}...`,
+              ),
+            );
+            console.log(
+              color.dim(`    Files: ${entry.data?.files?.length || 0}`),
+            );
+          } else if (entry.type === "review_result") {
+            console.log(
+              color.cyan(
+                `  📊 Review completed: ${entry.data?.findings?.length || 0} findings`,
+              ),
+            );
+          }
+
+          if (!fastReplay && entry.type !== "done" && entry.type !== "error") {
+            // Simulate delay for realistic replay
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+
+        console.log(color.dim(`\nTask: ${currentTask}\n`));
+        process.exit(0);
+      }
+      // biome-ignore lint/suspicious/noFallthroughSwitchClause: case exits via process.exit()
       default:
         s.stop(color.red(`✖ Unknown command: ${action}`));
         process.exit(1);
