@@ -65,6 +65,117 @@ app.use("*", logger());
 // Create logger for engine component
 const log = new Logger("engine");
 
+// --- Actionable Error Messages ---
+
+interface ActionableError {
+  message: string;
+  debugHint?: string;
+}
+
+/**
+ * Converts raw error messages into actionable guidance
+ */
+function getActionableError(rawError: string): ActionableError {
+  const errorLower = rawError.toLowerCase();
+
+  // Engine connection errors (reported back to CLI)
+  if (
+    errorLower.includes("econnrefused") ||
+    errorLower.includes("fetch failed") ||
+    errorLower.includes("connection refused") ||
+    errorLower.includes("engine") ||
+    errorLower.includes("localhost:8080")
+  ) {
+    return {
+      message:
+        "Engine unreachable on port 8080. Run `make dev-engine` in a separate terminal.",
+    };
+  }
+
+  // API key errors
+  if (
+    errorLower.includes("api key") ||
+    errorLower.includes("anthropic_api_key") ||
+    errorLower.includes("unauthorized") ||
+    errorLower.includes("401") ||
+    errorLower.includes("invalid api key") ||
+    errorLower.includes("not_provided")
+  ) {
+    return {
+      message:
+        "Invalid ANTHROPIC_API_KEY. Set it via: export ANTHROPIC_API_KEY=sk-...",
+    };
+  }
+
+  // Database connection errors
+  if (
+    errorLower.includes("econnrefused") &&
+    (errorLower.includes("5432") ||
+      errorLower.includes("postgres") ||
+      errorLower.includes("database"))
+  ) {
+    return {
+      message: "Database unavailable. Run `make db-up` to start PostgreSQL.",
+    };
+  }
+
+  // Rate limit errors
+  if (
+    errorLower.includes("rate limit") ||
+    errorLower.includes("429") ||
+    errorLower.includes("too many requests")
+  ) {
+    return {
+      message: "API rate limited. Wait 60 seconds and retry.",
+    };
+  }
+
+  // Context too large errors
+  if (
+    errorLower.includes("context") ||
+    errorLower.includes("token") ||
+    errorLower.includes("too large") ||
+    errorLower.includes("exceeds") ||
+    errorLower.includes("maximum")
+  ) {
+    return {
+      message:
+        "Context exceeds model limit. Try narrowing your task description or running `cerebro init` to index your workspace.",
+    };
+  }
+
+  // Approval timeout errors
+  if (
+    errorLower.includes("approval timeout") ||
+    errorLower.includes("timed out") ||
+    errorLower.includes("timeout")
+  ) {
+    return {
+      message:
+        "No approval response in 5 minutes. Re-run the command to try again.",
+    };
+  }
+
+  // Circuit breaker errors
+  if (
+    errorLower.includes("circuit breaker") ||
+    errorLower.includes("3 retries") ||
+    errorLower.includes("infinite loop") ||
+    errorLower.includes("terminal failure")
+  ) {
+    return {
+      message:
+        "Task failed after 3 retries. The error may require manual intervention. Check .cerebro/logs/ for details.",
+    };
+  }
+
+  // Catch-all
+  return {
+    message: rawError,
+    debugHint: "Run with CEREBRO_LOG_LEVEL=debug for details.",
+  };
+}
+
 // --- SSE Event Emission Helpers ---
 
 /**
@@ -109,7 +220,11 @@ const waitForApproval = async (
 
     setTimeout(() => {
       clearInterval(checkInterval);
-      reject(new Error("Approval timeout"));
+      reject(
+        new Error(
+          "No approval response in 5 minutes. Re-run the command to try again.",
+        ),
+      );
     }, timeoutMs);
   });
 };
@@ -124,7 +239,9 @@ app.post("/state", async (c) => {
     await saveStateTicket(ticket);
     return c.json({ success: true, ticket });
   } catch (error: any) {
-    return c.json({ success: false, error: error.message }, 400);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const actionable = getActionableError(errorMsg);
+    return c.json({ success: false, error: actionable.message }, 400);
   }
 });
 
@@ -146,7 +263,9 @@ app.post("/memory", async (c) => {
     await saveMemoryTicket(ticket);
     return c.json({ success: true, ticket });
   } catch (error: any) {
-    return c.json({ success: false, error: error.message }, 400);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const actionable = getActionableError(errorMsg);
+    return c.json({ success: false, error: actionable.message }, 400);
   }
 });
 
@@ -156,7 +275,9 @@ app.post("/memory/search", async (c) => {
     const results = await searchSimilarMemory(embedding, threshold, limit);
     return c.json({ success: true, results });
   } catch (error: any) {
-    return c.json({ success: false, error: error.message }, 400);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const actionable = getActionableError(errorMsg);
+    return c.json({ success: false, error: actionable.message }, 400);
   }
 });
 
@@ -745,21 +866,21 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
             } catch (_timeoutError) {
               ticket.status = "halted";
               await saveStateTicket(ticket);
+              const timeoutMsg =
+                "No approval response in 5 minutes. Re-run the command to try again.";
               console.log(
                 color.cyan(`[Mesh]`) +
                   ` ` +
-                  color.red(
-                    `[Approval] Timeout: No response within 5 minutes. Halting.`,
-                  ),
+                  color.red(`[Approval] Timeout: ${timeoutMsg}`),
               );
               await emitLog(
                 stream,
-                `[Approval] Timeout: No response within 5 minutes. Halting.`,
+                `[Approval] Timeout: ${timeoutMsg}`,
                 "error",
               );
               const ticketFailedEvent: TicketFailedEvent = {
                 type: "ticket_failed",
-                error: "Approval timeout",
+                error: timeoutMsg,
                 ticket: ticket as any,
               };
               await emitEvent(stream, ticketFailedEvent);
@@ -928,21 +1049,34 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
           });
           break;
         } catch (agentError: any) {
-          const cleanMsg = cleanErrorMessage(agentError?.message);
+          const rawMsg = agentError?.message || String(agentError);
+          const cleanMsg = cleanErrorMessage(rawMsg);
+          const actionable = getActionableError(cleanMsg);
+          const userFacingMsg = actionable.debugHint
+            ? `${actionable.message}\n  ${actionable.debugHint}`
+            : actionable.message;
           console.log(
-            color.cyan(`[Mesh]`) + ` ` + color.red(`[Mesh Error] ${cleanMsg}`),
+            color.cyan(`[Mesh]`) +
+              ` ` +
+              color.red(`[Mesh Error] ${userFacingMsg}`),
           );
-          await emitLog(stream, `[Mesh Error] ${cleanMsg}`, "error");
+          await emitLog(stream, `[Mesh Error] ${userFacingMsg}`, "error");
+          // Log raw error at debug level if available
+          if (process.env.CEREBRO_LOG_LEVEL === "debug") {
+            log.debug(`Raw error: ${rawMsg}`);
+          }
           CircuitBreaker.recordFailure(ticket, cleanMsg);
           await saveStateTicket(ticket);
 
           if ((ticket.status as string) === "halted") {
+            const circuitMsg =
+              "Task failed after 3 retries. The error may require manual intervention. Check .cerebro/logs/ for details.";
             log.error(
               `Circuit Breaker tripped: Terminal failure for ${ticket.id}.`,
             );
             const errorEvent: ErrorEvent = {
               success: false,
-              error: "Circuit Breaker broken: Infinite Loop Stopped.",
+              error: circuitMsg,
             };
             await stream.writeSSE({
               event: "error",
@@ -959,10 +1093,19 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
         }
       }
     } catch (error: any) {
-      log.error(`Fatal Error: ${cleanErrorMessage(error?.message)}`);
+      const rawMsg = error?.message || String(error);
+      const cleanMsg = cleanErrorMessage(rawMsg);
+      const actionable = getActionableError(cleanMsg);
+      const userFacingMsg = actionable.debugHint
+        ? `${actionable.message}\n  ${actionable.debugHint}`
+        : actionable.message;
+      log.error(`Fatal Error: ${cleanMsg}`);
+      if (process.env.CEREBRO_LOG_LEVEL === "debug") {
+        log.debug(`Raw error: ${rawMsg}`);
+      }
       const errorEvent: ErrorEvent = {
         success: false,
-        error: cleanErrorMessage(error?.message),
+        error: userFacingMsg,
       };
       await stream.writeSSE({
         event: "error",
@@ -980,7 +1123,9 @@ app.post("/mesh/approve", async (c) => {
     approvalResponses.set(approval.ticketId, approval);
     return c.json({ success: true, message: "Approval recorded" });
   } catch (error: any) {
-    return c.json({ success: false, error: error.message }, 400);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const actionable = getActionableError(errorMsg);
+    return c.json({ success: false, error: actionable.message }, 400);
   }
 });
 
@@ -1333,12 +1478,21 @@ If you find no issues, return an empty array: []`;
       );
       await emitLog(stream, `[Review] Analysis complete. Halting.`);
     } catch (error: any) {
-      log.error(`Review Fatal Error: ${cleanErrorMessage(error?.message)}`);
+      const rawMsg = error?.message || String(error);
+      const cleanMsg = cleanErrorMessage(rawMsg);
+      const actionable = getActionableError(cleanMsg);
+      const userFacingMsg = actionable.debugHint
+        ? `${actionable.message}\n  ${actionable.debugHint}`
+        : actionable.message;
+      log.error(`Review Fatal Error: ${cleanMsg}`);
+      if (process.env.CEREBRO_LOG_LEVEL === "debug") {
+        log.debug(`Raw error: ${rawMsg}`);
+      }
       await stream.writeSSE({
         event: "error",
         data: JSON.stringify({
           success: false,
-          error: cleanErrorMessage(error?.message),
+          error: userFacingMsg,
         }),
       });
     }
