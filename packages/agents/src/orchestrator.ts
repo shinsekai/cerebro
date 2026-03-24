@@ -25,6 +25,42 @@ export class OrchestratorAgent {
   ): Promise<{ content: ExecutionPlan; raw: any }> {
     // Different prompts based on mode
     const getSystemPrompt = () => {
+      if (mode === "review") {
+        return PromptTemplate.fromTemplate(`
+      You are Cerebro Orchestrator in REVIEW mode.
+      For code review, only quality and security agents are needed.
+
+      AVAILABLE AGENTS:
+      - quality: For code formatting, AST analysis, linting issues
+      - security: For OWASP vulnerability scanning, input validation issues
+
+      REVIEW DESCRIPTION: {taskDesc}
+
+      OUTPUT STRICT JSON (no markdown, no explanation):
+      {{
+        "summary": "Brief description of the review plan",
+        "steps": [
+          {{
+            "agent": "quality",
+            "description": "Analyze code for quality issues",
+            "depends_on": []
+          }},
+          {{
+            "agent": "security",
+            "description": "Scan for security vulnerabilities",
+            "depends_on": []
+          }}
+        ]
+      }}
+
+      Review mode rules:
+      - Only include quality and security agents
+      - Quality analyzes code style, complexity, bugs, error handling, typing
+      - Security scans for SQL injection, XSS, CSRF, secrets, input validation
+      - Both agents run in parallel (no dependencies)
+    `);
+      }
+
       if (mode === "fix") {
         return PromptTemplate.fromTemplate(`
       You are the Cerebro Orchestrator in FIX mode. The user reported a bug.
