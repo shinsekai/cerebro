@@ -732,6 +732,14 @@ async function main() {
                 workspaceRoot,
                 mode: action,
                 sessionContext,
+                previousContext:
+                  Object.keys(sessionContext).length > 0
+                    ? {
+                        task: sessionContext.lastTask || "",
+                        agentOutputs: sessionContext.agentOutputs || {},
+                        fileChanges: sessionContext.fileChanges || [],
+                      }
+                    : undefined,
               },
               spinner: s,
             });
