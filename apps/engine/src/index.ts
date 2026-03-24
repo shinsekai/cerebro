@@ -325,7 +325,9 @@ app.post("/mesh/loop", async (c) => {
             }
 
             const agenticConfig = agenticAgentRegistry[agent];
-            if (agenticConfig) {
+            const useAgentic = process.env.CEREBRO_AGENTIC !== "false";
+
+            if (useAgentic && agenticConfig) {
               // AGENTIC MODE: use tool-calling loop
               const executor = new ToolExecutor({ workspaceRoot });
               const loopResult = await runAgentLoop({
@@ -350,6 +352,37 @@ app.post("/mesh/loop", async (c) => {
               });
               agentOutputs[agent] = loopResult.content;
               allFileChanges.push(...executor.getPendingWrites());
+
+              // Track token usage for agentic mode
+              const agenticCost =
+                (loopResult.inputTokens / 1_000_000) * currentPricing.input +
+                (loopResult.outputTokens / 1_000_000) * currentPricing.output;
+              switch (agent) {
+                case "frontend":
+                  frontendTokens += loopResult.totalTokens;
+                  frontendCost += agenticCost;
+                  break;
+                case "backend":
+                  backendTokens += loopResult.totalTokens;
+                  backendCost += agenticCost;
+                  break;
+                case "quality":
+                  qualityTokens += loopResult.totalTokens;
+                  qualityCost += agenticCost;
+                  break;
+                case "security":
+                  securityTokens += loopResult.totalTokens;
+                  securityCost += agenticCost;
+                  break;
+                case "tester":
+                  testerTokens += loopResult.totalTokens;
+                  testerCost += agenticCost;
+                  break;
+                case "ops":
+                  opsTokens += loopResult.totalTokens;
+                  opsCost += agenticCost;
+                  break;
+              }
             } else {
               // FALLBACK: single-shot mode (old behavior)
               const agentInstance =
