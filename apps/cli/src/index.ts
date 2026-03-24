@@ -8,7 +8,11 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
-import { Logger } from "@cerebro/core";
+import {
+  type CerebroEvent,
+  Logger,
+  type ReviewResultEvent,
+} from "@cerebro/core";
 
 /**
  * Render a colored unified diff line
@@ -60,7 +64,7 @@ function displayFileContent(file: {
       console.log(color.gray(lines.join("\n")));
     }
   }
-  console.log(color.dim("─".repeat(50) + "\n"));
+  console.log(color.dim(`${"─".repeat(50)}\n`));
 }
 
 import {
@@ -145,6 +149,57 @@ async function clearSession(workspaceRoot: string): Promise<void> {
   }
 }
 
+// --- Typed SSE Event Handlers ---
+
+/**
+ * Handle a typed SSE event from the engine
+ */
+function handleTypedEvent(
+  event: CerebroEvent,
+  spinnerState: any,
+  onReviewResult?: (data: any) => void,
+): void {
+  switch (event.type) {
+    case "agent_started":
+      spinnerState.message(
+        `${color.cyan(`[${event.agent}]`)} ${color.dim(event.description)}`,
+      );
+      break;
+    case "agent_completed":
+      spinnerState.message(
+        `${color.green(`✔ ${event.agent}`)} ${color.dim(`completed (${event.tokens} tokens, $${event.cost.toFixed(4)})`)}`,
+      );
+      break;
+    case "agent_failed":
+      spinnerState.message(
+        `${color.red(`✖ ${event.agent}`)} ${color.red(`failed: ${event.error}`)}`,
+      );
+      break;
+    case "tool_call":
+      spinnerState.message(
+        `${color.dim(`[Tool] ${event.tool}(${event.input.slice(0, 50)}...)`)}`,
+      );
+      break;
+    case "tool_result":
+      spinnerState.message(
+        `${color.dim(`→ ${event.result.slice(0, 100)}...`)}`,
+      );
+      break;
+    case "approval_requested":
+      // Handled by legacy handler for now
+      break;
+    case "ticket_completed":
+      // Ticket completed - final event handled by 'done' event
+      break;
+    case "ticket_failed":
+      // Ticket failed - final event handled by 'error' event
+      break;
+    case "log":
+      spinnerState.message(`${color.dim(event.message)}`);
+      break;
+  }
+}
+
 // Shared SSE streaming function for engine responses
 async function streamEngineResponse(payload: {
   url: string;
@@ -191,7 +246,34 @@ async function streamEngineResponse(payload: {
           if (dataLines.length > 0) {
             const fullData = dataLines.join("\n");
 
-            if (currentEvent === "done" || currentEvent === "error") {
+            // Try to parse as typed event first
+            let handledAsTyped = false;
+            if (currentEvent !== "message") {
+              try {
+                const eventData = JSON.parse(fullData);
+                // Check if it's a CerebroEvent by checking for 'type' field
+                if (
+                  eventData &&
+                  typeof eventData === "object" &&
+                  "type" in eventData
+                ) {
+                  handleTypedEvent(
+                    eventData as CerebroEvent,
+                    payload.spinner,
+                    payload.onReviewResult,
+                  );
+                  handledAsTyped = true;
+                }
+              } catch {
+                // Not a typed event or malformed JSON, fall through to legacy handlers
+              }
+            }
+
+            // Legacy event handlers (skip if already handled as typed event)
+            if (
+              !handledAsTyped &&
+              (currentEvent === "done" || currentEvent === "error")
+            ) {
               try {
                 finalData = JSON.parse(fullData);
               } catch {
@@ -201,7 +283,7 @@ async function streamEngineResponse(payload: {
                   error: "Malformed response from Engine.",
                 };
               }
-            } else if (currentEvent === "review_result") {
+            } else if (!handledAsTyped && currentEvent === "review_result") {
               // Handle review result
               if (payload.onReviewResult) {
                 try {
@@ -211,7 +293,7 @@ async function streamEngineResponse(payload: {
                   log.error(`Error processing review result: ${error}`);
                 }
               }
-            } else if (currentEvent === "approval_request") {
+            } else if (!handledAsTyped && currentEvent === "approval_request") {
               // Handle approval request
               try {
                 const approvalData = JSON.parse(fullData);
@@ -260,7 +342,7 @@ async function streamEngineResponse(payload: {
                       } else {
                         console.log(color.gray(lines.join("\n")));
                       }
-                      console.log(color.dim("─".repeat(50) + "\n"));
+                      console.log(color.dim(`${"─".repeat(50)}\n`));
                     }
                   }
                 }
