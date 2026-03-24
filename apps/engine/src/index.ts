@@ -16,13 +16,13 @@ import {
   testerAgent,
 } from "@cerebro/agents";
 import {
-  buildExecutionWaves,
-  getDownstreamAgents,
-  getModelForAgent,
   type ApprovalResponse,
   ApprovalResponseSchema,
+  buildExecutionWaves,
   CircuitBreaker,
   type FileChange,
+  getDownstreamAgents,
+  getModelForAgent,
   MemoryTicketSchema,
   StateTicketSchema,
 } from "@cerebro/core";
@@ -147,6 +147,25 @@ app.post("/mesh/loop", async (c) => {
   const workspaceRoot = (body as any).workspaceRoot || process.cwd();
   ticketWorkspaceRoots.set(ticket.id, workspaceRoot);
 
+  // Extract previous context for conversation history
+  const previousContext = (body as any).previousContext;
+
+  // Build history block if previous context exists
+  let historyBlock = "";
+  if (previousContext) {
+    const { task, agentOutputs, fileChanges } = previousContext;
+    historyBlock = `=== PREVIOUS SESSION ===
+Previous task: ${task}
+
+Previous outputs:
+${Object.entries(agentOutputs || {})
+  .map(([agent, output]) => `--- ${agent} ---\n${output}\n--- END ---`)
+  .join("\n")}
+
+Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
+=== END PREVIOUS SESSION ===\n\n`;
+  }
+
   return streamSSE(c, async (stream) => {
     let orchestratorTokens = 0;
     let frontendTokens = 0;
@@ -231,6 +250,10 @@ app.post("/mesh/loop", async (c) => {
           ticket.task,
         );
         contextString = formatContextForPrompt(wsContext);
+        // Prepend history block if it exists
+        if (historyBlock) {
+          contextString = historyBlock + contextString;
+        }
         await pushLog(
           `[Context] Workspace scanned: ${wsContext.profile.framework} / ${wsContext.profile.language}`,
           color.cyan,
@@ -240,7 +263,7 @@ app.post("/mesh/loop", async (c) => {
           `[Context] Workspace scan failed: ${scanError.message}. Agents will work with empty context.`,
           color.yellow,
         );
-        contextString = "";
+        contextString = historyBlock || "";
       }
 
       const orchestrator = new OrchestratorAgent();
