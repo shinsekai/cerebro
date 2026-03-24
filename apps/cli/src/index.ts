@@ -14,6 +14,11 @@ import path from "path";
 import color from "picocolors";
 import { chdir, cwd } from "process";
 import { parseArgs } from "util";
+import {
+  buildDirectoryTree,
+  type WorkspaceProfile,
+  scanWorkspace,
+} from "@cerebro/workspace";
 
 // Shared SSE streaming function for engine responses
 async function streamEngineResponse(payload: {
@@ -267,8 +272,8 @@ async function findWorkspaceRoot(startDir: string): Promise<string> {
 }
 
 async function main() {
-  let action = command;
-  let taskDesc = target;
+  let action: string | null = command;
+  let taskDesc: string | null = target;
 
   if (action === "help") {
     console.log(
@@ -301,92 +306,39 @@ async function main() {
 
   intro(color.bgCyan(color.black(" Cerebro CLI ")));
 
-  if (!action) {
-    action = (await select({
-      message: "What would you like to do?",
-      options: [
-        {
-          value: "init",
-          label: "Initialize Cerebro context in this repository",
-        },
-        { value: "develop", label: "Develop a new feature" },
-        { value: "fix", label: "Fix a bug or issue" },
-        { value: "review", label: "Review code / PR" },
-        { value: "ops", label: "Perform Infrastructure Tasks" },
-      ],
-    })) as string;
+  // Main loop - keeps CLI running until user quits
+  while (true) {
+    if (!action) {
+      action = (await select({
+        message: "What would you like to do?",
+        options: [
+          {
+            value: "init",
+            label: "Initialize Cerebro context in this repository",
+          },
+          { value: "develop", label: "Develop a new feature" },
+          { value: "fix", label: "Fix a bug or issue" },
+          { value: "review", label: "Review code / PR" },
+          { value: "ops", label: "Perform Infrastructure Tasks" },
+          { value: "quit", label: "Quit" },
+        ],
+      })) as string;
 
-    if (isCancel(action)) {
+      if (isCancel(action)) {
+        outro("Goodbye!");
+        process.exit(0);
+      }
+    }
+
+    if (action === "quit") {
       outro("Goodbye!");
       process.exit(0);
     }
-  }
 
-  if (action === "develop" && !taskDesc) {
-    taskDesc = (await text({
-      message: "Describe the feature you want to develop:",
-      placeholder: "e.g., authentication system using JWT",
-      validate: (value) => {
-        if (!value) return "Please provide a description.";
-      },
-    })) as string;
-
-    if (isCancel(taskDesc)) {
-      outro("Canceled.");
-      process.exit(0);
-    }
-  }
-
-  if (action === "fix" && !taskDesc) {
-    taskDesc = (await text({
-      message: "Describe the bug or paste the error/stack trace:",
-      placeholder: "e.g., TypeError in src/api/users.ts:42",
-      validate: (value) => {
-        if (!value) return "Please provide a description.";
-      },
-    })) as string;
-
-    if (isCancel(taskDesc)) {
-      outro("Canceled.");
-      process.exit(0);
-    }
-  }
-
-  if (action === "ops" && !taskDesc) {
-    taskDesc = (await select({
-      message: "Select infrastructure task:",
-      options: [
-        {
-          value:
-            "Generate Dockerfile and docker-compose.yml for the current project",
-          label: "Generate Dockerfile + docker-compose",
-        },
-        {
-          value:
-            "Generate GitHub Actions CI/CD pipeline for the current project",
-          label: "Generate CI/CD pipeline (GitHub Actions)",
-        },
-        {
-          value:
-            "Generate deployment configuration (Kubernetes manifests, Terraform, or cloud provider configs)",
-          label: "Generate deployment config",
-        },
-        {
-          value: "custom",
-          label: "Custom ops task",
-        },
-      ],
-    })) as string;
-
-    if (isCancel(taskDesc)) {
-      outro("Canceled.");
-      process.exit(0);
-    }
-
-    if (taskDesc === "custom") {
+    if (action === "develop" && !taskDesc) {
       taskDesc = (await text({
-        message: "Describe the infrastructure task:",
-        placeholder: "e.g., Add nginx reverse proxy config",
+        message: "Describe the feature you want to develop:",
+        placeholder: "e.g., authentication system using JWT",
         validate: (value) => {
           if (!value) return "Please provide a description.";
         },
@@ -397,179 +349,326 @@ async function main() {
         process.exit(0);
       }
     }
-  }
 
-  const s = spinner();
-  s.start(`Starting cerebro ${action}...`);
+    if (action === "fix" && !taskDesc) {
+      taskDesc = (await text({
+        message: "Describe the bug or paste the error/stack trace:",
+        placeholder: "e.g., TypeError in src/api/users.ts:42",
+        validate: (value) => {
+          if (!value) return "Please provide a description.";
+        },
+      })) as string;
 
-  // Dispatch logic
-  switch (action) {
-    case "init":
-      await new Promise((r) => setTimeout(r, 1000));
-      s.stop(color.green(`✔ Cerebro initialized automatically.`));
-      break;
-    case "develop":
-    case "fix":
-      try {
-        const { success, data: finalData } = await streamEngineResponse({
-          url: "http://localhost:8080/mesh/loop",
-          body: {
-            id: randomUUID(),
-            task: taskDesc,
-            retry_count: 0,
-            status: "pending",
-            workspaceRoot: await findWorkspaceRoot(cwd()),
-            mode: action,
-          },
-          spinner: s,
-        });
-
-        if (success) {
-          if (finalData.partial) {
-            const actionLabel =
-              action === "fix" ? "Bug fixed" : "Feature developed";
-            s.stop(color.yellow(`⚠ ${actionLabel} with partial failures.`));
-            console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
-
-            // Show which agents succeeded, failed, and were skipped
-            console.log(color.bold(`⚠  Execution Results:`));
-
-            // Show successful agents (processed)
-            const allAgents = [
-              "frontend",
-              "backend",
-              "quality",
-              "security",
-              "tester",
-              "ops",
-            ];
-            const failedAgentSet = new Set(
-              finalData.failedAgents?.map((f: any) => f.agent) || [],
-            );
-            const skippedAgentSet = new Set(
-              finalData.skippedAgents?.map((s: any) => s.agent) || [],
-            );
-            const succeededAgents = allAgents.filter(
-              (a) => !failedAgentSet.has(a) && !skippedAgentSet.has(a),
-            );
-
-            for (const agent of succeededAgents) {
-              console.log(
-                `  ${color.green("✔")} ${color.cyan(agent)} completed`,
-              );
-            }
-
-            for (const failed of finalData.failedAgents || []) {
-              console.log(
-                `  ${color.red("✖")} ${color.cyan(failed.agent)} failed: ${color.red(failed.error)}`,
-              );
-            }
-
-            for (const skipped of finalData.skippedAgents || []) {
-              console.log(
-                `  ${color.yellow("⊘")} ${color.cyan(skipped.agent)} skipped (${color.yellow(skipped.reason)})`,
-              );
-            }
-
-            console.log();
-          } else {
-            const actionLabel =
-              action === "fix" ? "Bug fixed" : "Feature developed";
-            s.stop(color.green(`✔ ${actionLabel} successfully.`));
-            console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
-          }
-
-          if (finalData.usage) {
-            const u = finalData.usage;
-            console.log(color.cyan(`\n📊 Token Consumption:`));
-            console.log(
-              `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
-            );
-            console.log(
-              `  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`,
-            );
-            console.log(
-              `  Backend      : ${color.yellow(u.backend?.tokens)} tokens`,
-            );
-            console.log(
-              `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
-            );
-            console.log(
-              `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
-            );
-            console.log(
-              `  Tester       : ${color.yellow(u.tester?.tokens)} tokens`,
-            );
-            console.log(
-              `  Ops          : ${color.yellow(u.ops?.tokens)} tokens`,
-            );
-            console.log(color.dim(`  -----------------------`));
-            console.log(
-              `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
-            );
-          }
-        } else if (finalData) {
-          s.stop(color.red(`✖ Failed: ${finalData.error}`));
-        } else {
-          s.stop(color.yellow(`⚠ Stream ended without final status.`));
-        }
-      } catch (err: any) {
-        s.stop(
-          color.red(
-            `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
-          ),
-        );
+      if (isCancel(taskDesc)) {
+        outro("Canceled.");
+        process.exit(0);
       }
-      break;
-    case "review":
-      try {
-        s.start("Detecting code changes...");
+    }
+
+    if (action === "ops" && !taskDesc) {
+      taskDesc = (await select({
+        message: "Select infrastructure task:",
+        options: [
+          {
+            value:
+              "Generate Dockerfile and docker-compose.yml for the current project",
+            label: "Generate Dockerfile + docker-compose",
+          },
+          {
+            value:
+              "Generate GitHub Actions CI/CD pipeline for the current project",
+            label: "Generate CI/CD pipeline (GitHub Actions)",
+          },
+          {
+            value:
+              "Generate deployment configuration (Kubernetes manifests, Terraform, or cloud provider configs)",
+            label: "Generate deployment config",
+          },
+          {
+            value: "custom",
+            label: "Custom ops task",
+          },
+        ],
+      })) as string;
+
+      if (isCancel(taskDesc)) {
+        outro("Canceled.");
+        process.exit(0);
+      }
+
+      if (taskDesc === "custom") {
+        taskDesc = (await text({
+          message: "Describe the infrastructure task:",
+          placeholder: "e.g., Add nginx reverse proxy config",
+          validate: (value) => {
+            if (!value) return "Please provide a description.";
+          },
+        })) as string;
+
+        if (isCancel(taskDesc)) {
+          outro("Canceled.");
+          process.exit(0);
+        }
+      }
+    }
+
+    const s = spinner();
+    s.start(`Starting cerebro ${action}...`);
+
+    // Dispatch logic
+    switch (action) {
+      case "init": {
+        s.start("Scanning workspace...");
         const workspaceRoot = await findWorkspaceRoot(cwd());
+        const profile: WorkspaceProfile = await scanWorkspace(workspaceRoot);
+        const tree = await buildDirectoryTree(workspaceRoot);
 
-        // Check if we're in a git repository and detect changes
-        const { spawn } = await import("child_process");
+        // Create .cerebro directory
+        const cerebroDir = path.join(workspaceRoot, ".cerebro");
+        await fs.mkdir(cerebroDir, { recursive: true });
 
-        const runGitCommand = (command: string[]): Promise<string> => {
-          return new Promise((resolve, reject) => {
-            const proc = spawn("git", command, { cwd: workspaceRoot });
-            let stdout = "";
-            let stderr = "";
-            proc.stdout?.on("data", (data) => (stdout += data.toString()));
-            proc.stderr?.on("data", (data) => (stderr += data.toString()));
-            proc.on("close", (code) => {
-              if (code === 0) resolve(stdout.trim());
-              else
-                reject(
-                  new Error(stderr || `Git command failed with code ${code}`),
-                );
-            });
-          });
-        };
+        // Write profile.json
+        const profilePath = path.join(cerebroDir, "profile.json");
+        await fs.writeFile(
+          profilePath,
+          JSON.stringify(profile, null, 2),
+          "utf-8",
+        );
 
-        let diff = "";
-        let reviewTarget = "";
+        // Write tree.json
+        const treePath = path.join(cerebroDir, "tree.json");
+        await fs.writeFile(treePath, JSON.stringify(tree, null, 2), "utf-8");
 
-        // Check for uncommitted changes
+        // Count files in tree
+        const fileCount = tree
+          .split("\n")
+          .filter((line) => line && !line.endsWith("/")).length;
+        const dirCount = tree
+          .split("\n")
+          .filter((line) => line.endsWith("/")).length;
+
+        // Stop spinner and show summary
+        s.stop(color.green(`✔ Cerebro initialized`));
+
+        console.log(color.dim("─".repeat(50)));
+        console.log(
+          `  ${color.cyan("Runtime:")} ${profile.runtime} | ${color.cyan("Language:")} ${profile.language} | ${color.cyan("Framework:")} ${profile.framework}`,
+        );
+        console.log(
+          `  ${color.cyan("Test runner:")} ${profile.testRunner} | ${color.cyan("Linter:")} ${profile.linter}`,
+        );
+        console.log(
+          `  ${color.cyan("Database:")} ${profile.database} | ${color.cyan("Monorepo:")} ${profile.monorepo ? "yes" : "no"}`,
+        );
+        console.log(
+          `  ${color.cyan("Indexed")} ${fileCount} files across ${dirCount} directories`,
+        );
+        console.log(color.dim("─".repeat(50)));
+
+        // Suggest adding to .gitignore
+        const gitignorePath = path.join(workspaceRoot, ".gitignore");
+        let gitignoreContent = "";
         try {
-          const diffStat = await runGitCommand(["diff", "--stat"]);
-          if (diffStat) {
-            // Uncommitted changes exist
-            s.stop("Uncommitted changes detected");
-            const reviewUncommitted = await confirm({
-              message: "Review uncommitted changes?",
-              initialValue: true,
-            });
+          gitignoreContent = await fs.readFile(gitignorePath, "utf-8");
+        } catch {
+          // File doesn't exist
+        }
 
-            if (isCancel(reviewUncommitted)) {
-              outro("Review cancelled.");
-              process.exit(0);
+        if (!gitignoreContent.includes(".cerebro")) {
+          console.log(
+            color.yellow(
+              `\n⚠ Consider adding ${color.cyan(".cerebro")} to ${color.cyan(".gitignore")}:`,
+            ),
+          );
+          console.log(color.dim('  echo ".cerebro" >> .gitignore'));
+        }
+
+        // Reset for next loop iteration
+        action = null;
+        taskDesc = null;
+        continue;
+      }
+      case "develop":
+      case "fix":
+        try {
+          const { success, data: finalData } = await streamEngineResponse({
+            url: "http://localhost:8080/mesh/loop",
+            body: {
+              id: randomUUID(),
+              task: taskDesc,
+              retry_count: 0,
+              status: "pending",
+              workspaceRoot: await findWorkspaceRoot(cwd()),
+              mode: action,
+            },
+            spinner: s,
+          });
+
+          if (success) {
+            if (finalData.partial) {
+              const actionLabel =
+                action === "fix" ? "Bug fixed" : "Feature developed";
+              s.stop(color.yellow(`⚠ ${actionLabel} with partial failures.`));
+              console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
+
+              // Show which agents succeeded, failed, and were skipped
+              console.log(color.bold(`⚠  Execution Results:`));
+
+              // Show successful agents (processed)
+              const allAgents = [
+                "frontend",
+                "backend",
+                "quality",
+                "security",
+                "tester",
+                "ops",
+              ];
+              const failedAgentSet = new Set(
+                finalData.failedAgents?.map((f: any) => f.agent) || [],
+              );
+              const skippedAgentSet = new Set(
+                finalData.skippedAgents?.map((s: any) => s.agent) || [],
+              );
+              const succeededAgents = allAgents.filter(
+                (a) => !failedAgentSet.has(a) && !skippedAgentSet.has(a),
+              );
+
+              for (const agent of succeededAgents) {
+                console.log(
+                  `  ${color.green("✔")} ${color.cyan(agent)} completed`,
+                );
+              }
+
+              for (const failed of finalData.failedAgents || []) {
+                console.log(
+                  `  ${color.red("✖")} ${color.cyan(failed.agent)} failed: ${color.red(failed.error)}`,
+                );
+              }
+
+              for (const skipped of finalData.skippedAgents || []) {
+                console.log(
+                  `  ${color.yellow("⊘")} ${color.cyan(skipped.agent)} skipped (${color.yellow(skipped.reason)})`,
+                );
+              }
+
+              console.log();
+            } else {
+              const actionLabel =
+                action === "fix" ? "Bug fixed" : "Feature developed";
+              s.stop(color.green(`✔ ${actionLabel} successfully.`));
+              console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
             }
 
-            if (reviewUncommitted) {
-              diff = await runGitCommand(["diff"]);
-              reviewTarget = "uncommitted changes";
+            if (finalData.usage) {
+              const u = finalData.usage;
+              console.log(color.cyan(`\n📊 Token Consumption:`));
+              console.log(
+                `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
+              );
+              console.log(
+                `  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`,
+              );
+              console.log(
+                `  Backend      : ${color.yellow(u.backend?.tokens)} tokens`,
+              );
+              console.log(
+                `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
+              );
+              console.log(
+                `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
+              );
+              console.log(
+                `  Tester       : ${color.yellow(u.tester?.tokens)} tokens`,
+              );
+              console.log(
+                `  Ops          : ${color.yellow(u.ops?.tokens)} tokens`,
+              );
+              console.log(color.dim(`  -----------------------`));
+              console.log(
+                `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
+              );
+            }
+          } else if (finalData) {
+            s.stop(color.red(`✖ Failed: ${finalData.error}`));
+          } else {
+            s.stop(color.yellow(`⚠ Stream ended without final status.`));
+          }
+        } catch (err: any) {
+          s.stop(
+            color.red(
+              `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
+            ),
+          );
+        }
+        break;
+      case "review":
+        try {
+          s.start("Detecting code changes...");
+          const workspaceRoot = await findWorkspaceRoot(cwd());
+
+          // Check if we're in a git repository and detect changes
+          const { spawn } = await import("child_process");
+
+          const runGitCommand = (command: string[]): Promise<string> => {
+            return new Promise((resolve, reject) => {
+              const proc = spawn("git", command, { cwd: workspaceRoot });
+              let stdout = "";
+              let stderr = "";
+              proc.stdout?.on("data", (data) => (stdout += data.toString()));
+              proc.stderr?.on("data", (data) => (stderr += data.toString()));
+              proc.on("close", (code) => {
+                if (code === 0) resolve(stdout.trim());
+                else
+                  reject(
+                    new Error(stderr || `Git command failed with code ${code}`),
+                  );
+              });
+            });
+          };
+
+          let diff = "";
+          let reviewTarget = "";
+
+          // Check for uncommitted changes
+          try {
+            const diffStat = await runGitCommand(["diff", "--stat"]);
+            if (diffStat) {
+              // Uncommitted changes exist
+              s.stop("Uncommitted changes detected");
+              const reviewUncommitted = await confirm({
+                message: "Review uncommitted changes?",
+                initialValue: true,
+              });
+
+              if (isCancel(reviewUncommitted)) {
+                outro("Review cancelled.");
+                process.exit(0);
+              }
+
+              if (reviewUncommitted) {
+                diff = await runGitCommand(["diff"]);
+                reviewTarget = "uncommitted changes";
+              } else {
+                // User wants to review a branch instead
+                const branch = await text({
+                  message: "Branch to compare against (e.g., main):",
+                  placeholder: "main",
+                  validate: (value) => {
+                    if (!value) return "Please provide a branch name.";
+                  },
+                });
+
+                if (isCancel(branch)) {
+                  outro("Review cancelled.");
+                  process.exit(0);
+                }
+
+                diff = await runGitCommand(["diff", `${branch}...HEAD`]);
+                reviewTarget = branch;
+              }
             } else {
-              // User wants to review a branch instead
+              // No uncommitted changes, ask for branch
+              s.stop("No uncommitted changes found");
               const branch = await text({
                 message: "Branch to compare against (e.g., main):",
                 placeholder: "main",
@@ -586,282 +685,270 @@ async function main() {
               diff = await runGitCommand(["diff", `${branch}...HEAD`]);
               reviewTarget = branch;
             }
-          } else {
-            // No uncommitted changes, ask for branch
-            s.stop("No uncommitted changes found");
-            const branch = await text({
-              message: "Branch to compare against (e.g., main):",
-              placeholder: "main",
-              validate: (value) => {
-                if (!value) return "Please provide a branch name.";
-              },
-            });
-
-            if (isCancel(branch)) {
-              outro("Review cancelled.");
-              process.exit(0);
-            }
-
-            diff = await runGitCommand(["diff", `${branch}...HEAD`]);
-            reviewTarget = branch;
+          } catch (gitError) {
+            // Not a git repo or git command failed
+            s.stop(
+              color.yellow("⚠ Not in a git repository or git unavailable"),
+            );
+            console.log(
+              color.gray(
+                "Reviewing current workspace state without git diff...\n",
+              ),
+            );
+            diff = "(No git diff available - reviewing workspace structure)";
+            reviewTarget = "workspace";
           }
-        } catch (gitError) {
-          // Not a git repo or git command failed
-          s.stop(color.yellow("⚠ Not in a git repository or git unavailable"));
-          console.log(
-            color.gray(
-              "Reviewing current workspace state without git diff...\n",
+
+          if (!diff || diff === "") {
+            s.stop(color.yellow("⚠ No changes found to review"));
+            outro("No changes to review.");
+            process.exit(0);
+          }
+
+          // Start the review
+          const reviewSpinner = spinner();
+          reviewSpinner.start(
+            `Analyzing ${diff.includes("git") ? "git diff" : "workspace"} for quality and security issues...`,
+          );
+
+          const { success, data: finalData } = await streamEngineResponse({
+            url: "http://localhost:8080/mesh/review",
+            body: {
+              id: randomUUID(),
+              task: taskDesc || "code review",
+              retry_count: 0,
+              status: "pending",
+              workspaceRoot,
+              mode: "review",
+              diff,
+              reviewTarget,
+            },
+            spinner: reviewSpinner,
+            onReviewResult: (reviewData) => {
+              reviewSpinner.stop("Analysis complete");
+              console.log(
+                color.bold(`\n📊 Code Review Results (${reviewTarget})\n`),
+              );
+
+              if (!reviewData.findings || reviewData.findings.length === 0) {
+                console.log(
+                  color.green("✓ No issues found! Code looks clean.\n"),
+                );
+              } else {
+                const { findings } = reviewData;
+
+                // Group by severity
+                const critical = findings.filter(
+                  (f: any) => f.severity === "critical",
+                );
+                const warnings = findings.filter(
+                  (f: any) => f.severity === "warning",
+                );
+                const info = findings.filter((f: any) => f.severity === "info");
+
+                if (critical.length > 0) {
+                  console.log(color.red(`\n${color.bold("Critical Issues:")}`));
+                  for (const f of critical) {
+                    console.log(
+                      `${color.red("✖")} ${color.cyan(f.file)}:${f.line} — ${color.red(f.message)}`,
+                    );
+                    if (f.suggestion) {
+                      console.log(color.dim(`  → ${f.suggestion}`));
+                    }
+                  }
+                }
+
+                if (warnings.length > 0) {
+                  console.log(color.yellow(`\n${color.bold("Warnings:")}`));
+                  for (const f of warnings) {
+                    console.log(
+                      `${color.yellow("⚠")} ${color.cyan(f.file)}:${f.line} — ${f.message}`,
+                    );
+                    if (f.suggestion) {
+                      console.log(color.dim(`  → ${f.suggestion}`));
+                    }
+                  }
+                }
+
+                if (info.length > 0) {
+                  console.log(color.blue(`\n${color.bold("Info:")}`));
+                  for (const f of info) {
+                    console.log(
+                      `${color.blue("ℹ")} ${color.cyan(f.file)}:${f.line} — ${f.message}`,
+                    );
+                    if (f.suggestion) {
+                      console.log(color.dim(`  → ${f.suggestion}`));
+                    }
+                  }
+                }
+
+                console.log(color.dim(`\n${"—".repeat(60)}`));
+                console.log(
+                  color.dim(
+                    `Total: ${critical.length} critical, ${warnings.length} warning(s), ${info.length} info`,
+                  ),
+                );
+                console.log(color.dim(`"${"—".repeat(60)}\n`));
+              }
+            },
+          });
+
+          if (success) {
+            reviewSpinner.stop(color.green("✔ Review completed."));
+            console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
+
+            if (finalData.usage) {
+              const u = finalData.usage;
+              console.log(color.cyan(`\n📊 Token Consumption:`));
+              console.log(
+                `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
+              );
+              console.log(
+                `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
+              );
+              console.log(
+                `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
+              );
+              console.log(color.dim(`  -----------------------`));
+              console.log(
+                `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
+              );
+            }
+          } else if (finalData) {
+            reviewSpinner.stop(color.red(`✖ Failed: ${finalData.error}`));
+          } else {
+            reviewSpinner.stop(
+              color.yellow(`⚠ Stream ended without final status.`),
+            );
+          }
+        } catch (err: any) {
+          s.stop(
+            color.red(
+              `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
             ),
           );
-          diff = "(No git diff available - reviewing workspace structure)";
-          reviewTarget = "workspace";
         }
+        break;
+      case "ops":
+        try {
+          const { success, data: finalData } = await streamEngineResponse({
+            url: "http://localhost:8080/mesh/loop",
+            body: {
+              id: randomUUID(),
+              task: taskDesc,
+              retry_count: 0,
+              status: "pending",
+              workspaceRoot: await findWorkspaceRoot(cwd()),
+              mode: "ops",
+            },
+            spinner: s,
+          });
 
-        if (!diff || diff === "") {
-          s.stop(color.yellow("⚠ No changes found to review"));
-          outro("No changes to review.");
-          process.exit(0);
-        }
-
-        // Start the review
-        const reviewSpinner = spinner();
-        reviewSpinner.start(
-          `Analyzing ${diff.includes("git") ? "git diff" : "workspace"} for quality and security issues...`,
-        );
-
-        const { success, data: finalData } = await streamEngineResponse({
-          url: "http://localhost:8080/mesh/review",
-          body: {
-            id: randomUUID(),
-            task: taskDesc || "code review",
-            retry_count: 0,
-            status: "pending",
-            workspaceRoot,
-            mode: "review",
-            diff,
-            reviewTarget,
-          },
-          spinner: reviewSpinner,
-          onReviewResult: (reviewData) => {
-            reviewSpinner.stop("Analysis complete");
-            console.log(
-              color.bold(`\n📊 Code Review Results (${reviewTarget})\n`),
-            );
-
-            if (!reviewData.findings || reviewData.findings.length === 0) {
-              console.log(
-                color.green("✓ No issues found! Code looks clean.\n"),
-              );
-            } else {
-              const { findings } = reviewData;
-
-              // Group by severity
-              const critical = findings.filter(
-                (f: any) => f.severity === "critical",
-              );
-              const warnings = findings.filter(
-                (f: any) => f.severity === "warning",
-              );
-              const info = findings.filter((f: any) => f.severity === "info");
-
-              if (critical.length > 0) {
-                console.log(color.red(`\n${color.bold("Critical Issues:")}`));
-                for (const f of critical) {
-                  console.log(
-                    `${color.red("✖")} ${color.cyan(f.file)}:${f.line} — ${color.red(f.message)}`,
-                  );
-                  if (f.suggestion) {
-                    console.log(color.dim(`  → ${f.suggestion}`));
-                  }
-                }
-              }
-
-              if (warnings.length > 0) {
-                console.log(color.yellow(`\n${color.bold("Warnings:")}`));
-                for (const f of warnings) {
-                  console.log(
-                    `${color.yellow("⚠")} ${color.cyan(f.file)}:${f.line} — ${f.message}`,
-                  );
-                  if (f.suggestion) {
-                    console.log(color.dim(`  → ${f.suggestion}`));
-                  }
-                }
-              }
-
-              if (info.length > 0) {
-                console.log(color.blue(`\n${color.bold("Info:")}`));
-                for (const f of info) {
-                  console.log(
-                    `${color.blue("ℹ")} ${color.cyan(f.file)}:${f.line} — ${f.message}`,
-                  );
-                  if (f.suggestion) {
-                    console.log(color.dim(`  → ${f.suggestion}`));
-                  }
-                }
-              }
-
-              console.log(color.dim(`\n${"—".repeat(60)}`));
-              console.log(
-                color.dim(
-                  `Total: ${critical.length} critical, ${warnings.length} warning(s), ${info.length} info`,
+          if (success) {
+            if (finalData.partial) {
+              s.stop(
+                color.yellow(
+                  `⚠ Infrastructure generated with partial failures.`,
                 ),
               );
-              console.log(color.dim(`"${"—".repeat(60)}\n`));
+              console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
+
+              // Show which agents succeeded, failed, and were skipped
+              console.log(color.bold(`⚠  Execution Results:`));
+
+              const allAgents = [
+                "frontend",
+                "backend",
+                "quality",
+                "security",
+                "tester",
+                "ops",
+              ];
+              const failedAgentSet = new Set(
+                finalData.failedAgents?.map((f: any) => f.agent) || [],
+              );
+              const skippedAgentSet = new Set(
+                finalData.skippedAgents?.map((s: any) => s.agent) || [],
+              );
+              const succeededAgents = allAgents.filter(
+                (a) => !failedAgentSet.has(a) && !skippedAgentSet.has(a),
+              );
+
+              for (const agent of succeededAgents) {
+                console.log(
+                  `  ${color.green("✔")} ${color.cyan(agent)} completed`,
+                );
+              }
+
+              for (const failed of finalData.failedAgents || []) {
+                console.log(
+                  `  ${color.red("✖")} ${color.cyan(failed.agent)} failed: ${color.red(failed.error)}`,
+                );
+              }
+
+              for (const skipped of finalData.skippedAgents || []) {
+                console.log(
+                  `  ${color.yellow("⊘")} ${color.cyan(skipped.agent)} skipped (${color.yellow(skipped.reason)})`,
+                );
+              }
+
+              console.log();
+            } else {
+              s.stop(color.green(`✔ Infrastructure generated.`));
+              console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
             }
-          },
-        });
 
-        if (success) {
-          reviewSpinner.stop(color.green("✔ Review completed."));
-          console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
-
-          if (finalData.usage) {
-            const u = finalData.usage;
-            console.log(color.cyan(`\n📊 Token Consumption:`));
-            console.log(
-              `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
-            );
-            console.log(
-              `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
-            );
-            console.log(
-              `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
-            );
-            console.log(color.dim(`  -----------------------`));
-            console.log(
-              `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
-            );
+            if (finalData.usage) {
+              const u = finalData.usage;
+              console.log(color.cyan(`\n📊 Token Consumption:`));
+              console.log(
+                `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
+              );
+              console.log(
+                `  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`,
+              );
+              console.log(
+                `  Backend      : ${color.yellow(u.backend?.tokens)} tokens`,
+              );
+              console.log(
+                `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
+              );
+              console.log(
+                `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
+              );
+              console.log(
+                `  Tester       : ${color.yellow(u.tester?.tokens)} tokens`,
+              );
+              console.log(
+                `  Ops          : ${color.yellow(u.ops?.tokens)} tokens`,
+              );
+              console.log(color.dim(`  -----------------------`));
+              console.log(
+                `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
+              );
+            }
+          } else if (finalData) {
+            s.stop(color.red(`✖ Failed: ${finalData.error}`));
+          } else {
+            s.stop(color.yellow(`⚠ Stream ended without final status.`));
           }
-        } else if (finalData) {
-          reviewSpinner.stop(color.red(`✖ Failed: ${finalData.error}`));
-        } else {
-          reviewSpinner.stop(
-            color.yellow(`⚠ Stream ended without final status.`),
+        } catch (err: any) {
+          s.stop(
+            color.red(
+              `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
+            ),
           );
         }
-      } catch (err: any) {
-        s.stop(
-          color.red(
-            `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
-          ),
-        );
-      }
-      break;
-    case "ops":
-      try {
-        const { success, data: finalData } = await streamEngineResponse({
-          url: "http://localhost:8080/mesh/loop",
-          body: {
-            id: randomUUID(),
-            task: taskDesc,
-            retry_count: 0,
-            status: "pending",
-            workspaceRoot: await findWorkspaceRoot(cwd()),
-            mode: "ops",
-          },
-          spinner: s,
-        });
+        break;
+      default:
+        s.stop(color.red(`✖ Unknown command: ${action}`));
+        process.exit(1);
+    }
 
-        if (success) {
-          if (finalData.partial) {
-            s.stop(
-              color.yellow(`⚠ Infrastructure generated with partial failures.`),
-            );
-            console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
-
-            // Show which agents succeeded, failed, and were skipped
-            console.log(color.bold(`⚠  Execution Results:`));
-
-            const allAgents = [
-              "frontend",
-              "backend",
-              "quality",
-              "security",
-              "tester",
-              "ops",
-            ];
-            const failedAgentSet = new Set(
-              finalData.failedAgents?.map((f: any) => f.agent) || [],
-            );
-            const skippedAgentSet = new Set(
-              finalData.skippedAgents?.map((s: any) => s.agent) || [],
-            );
-            const succeededAgents = allAgents.filter(
-              (a) => !failedAgentSet.has(a) && !skippedAgentSet.has(a),
-            );
-
-            for (const agent of succeededAgents) {
-              console.log(
-                `  ${color.green("✔")} ${color.cyan(agent)} completed`,
-              );
-            }
-
-            for (const failed of finalData.failedAgents || []) {
-              console.log(
-                `  ${color.red("✖")} ${color.cyan(failed.agent)} failed: ${color.red(failed.error)}`,
-              );
-            }
-
-            for (const skipped of finalData.skippedAgents || []) {
-              console.log(
-                `  ${color.yellow("⊘")} ${color.cyan(skipped.agent)} skipped (${color.yellow(skipped.reason)})`,
-              );
-            }
-
-            console.log();
-          } else {
-            s.stop(color.green(`✔ Infrastructure generated.`));
-            console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
-          }
-
-          if (finalData.usage) {
-            const u = finalData.usage;
-            console.log(color.cyan(`\n📊 Token Consumption:`));
-            console.log(
-              `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
-            );
-            console.log(
-              `  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`,
-            );
-            console.log(
-              `  Backend      : ${color.yellow(u.backend?.tokens)} tokens`,
-            );
-            console.log(
-              `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
-            );
-            console.log(
-              `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
-            );
-            console.log(
-              `  Tester       : ${color.yellow(u.tester?.tokens)} tokens`,
-            );
-            console.log(
-              `  Ops          : ${color.yellow(u.ops?.tokens)} tokens`,
-            );
-            console.log(color.dim(`  -----------------------`));
-            console.log(
-              `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
-            );
-          }
-        } else if (finalData) {
-          s.stop(color.red(`✖ Failed: ${finalData.error}`));
-        } else {
-          s.stop(color.yellow(`⚠ Stream ended without final status.`));
-        }
-      } catch (err: any) {
-        s.stop(
-          color.red(
-            `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
-          ),
-        );
-      }
-      break;
-    default:
-      s.stop(color.red(`✖ Unknown command: ${action}`));
-      process.exit(1);
+    // Reset for next loop iteration
+    action = null;
+    taskDesc = null;
   }
-
-  outro(color.magenta("Cerebro execution complete."));
 }
 
 main().catch(console.error);
