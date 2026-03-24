@@ -1,5 +1,6 @@
+import { cwd } from "node:process";
 import { parseArgs } from "node:util";
-import { intro, isCancel, outro, select, spinner, text } from "@clack/prompts";
+import { isCancel, outro, select, spinner, text } from "@clack/prompts";
 import color from "picocolors";
 
 // Command modules
@@ -12,6 +13,9 @@ import { runReview } from "./commands/review.js";
 
 // Lib modules
 import { getActionableError } from "./lib/errors.js";
+
+// UI modules
+import { renderHeader } from "./ui/header.js";
 
 const { positionals, values } = parseArgs({
   args: process.argv.slice(2),
@@ -38,9 +42,7 @@ async function main() {
   let taskDesc: string | null = target;
 
   if (action === "help") {
-    console.log(
-      `\n${color.bgCyan(color.black(" Cerebro Developer CLI "))} v1.0.0\n`,
-    );
+    await renderHeader(cwd());
     console.log(`${color.bold("Usage:")} cerebro [command] [options]\n`);
     console.log(`${color.bold("Commands:")}`);
     console.log(
@@ -79,7 +81,7 @@ async function main() {
     process.exit(0);
   }
 
-  intro(color.bgCyan(color.black(" Cerebro CLI ")));
+  await renderHeader(cwd());
 
   // Main loop - keeps CLI running until user quits
   while (true) {
