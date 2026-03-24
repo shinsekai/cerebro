@@ -17,15 +17,28 @@ import {
 } from "@cerebro/agents";
 import {
   type ApprovalResponse,
+  type AgentCompletedEvent,
+  type AgentFailedEvent,
+  type AgentStartedEvent,
+  type ApprovalRequestedEvent,
   ApprovalResponseSchema,
   buildExecutionWaves,
   CircuitBreaker,
+  type CerebroEvent,
+  type DoneEvent,
+  type ErrorEvent,
   type FileChange,
   getDownstreamAgents,
   getModelForAgent,
+  type LogEvent,
   Logger,
   MemoryTicketSchema,
+  type ReviewResultEvent,
   StateTicketSchema,
+  type TicketCompletedEvent,
+  type TicketFailedEvent,
+  type ToolCallEvent,
+  type ToolResultEvent,
 } from "@cerebro/core";
 import {
   getStateTicket,
@@ -51,6 +64,27 @@ app.use("*", logger());
 
 // Create logger for engine component
 const log = new Logger("engine");
+
+// --- SSE Event Emission Helpers ---
+
+/**
+ * Emit a typed SSE event to the client
+ */
+async function emitEvent(stream: any, event: CerebroEvent): Promise<void> {
+  await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+}
+
+/**
+ * Emit a legacy untyped log message (for backward compatibility)
+ */
+async function emitLog(
+  stream: any,
+  message: string,
+  level = "info",
+): Promise<void> {
+  const logEvent: LogEvent = { type: "log", message, level };
+  await emitEvent(stream, logEvent);
+}
 
 // In-memory approval state storage
 const approvalResponses = new Map<string, ApprovalResponse>();
@@ -137,7 +171,7 @@ const cleanErrorMessage = (msg: string | undefined): string => {
         return parsed.error.message;
       }
     }
-  } catch (e) {}
+  } catch (_e) {}
   return msg;
 };
 
@@ -230,21 +264,21 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
     // Format cost for display
     const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
 
-    // Helper to log beautifully and pipe to CLI
-    const pushLog = async (
-      msg: string,
-      engineColor: (str: string) => string = color.white,
-    ) => {
-      console.log(color.cyan(`[Mesh]`) + ` ` + engineColor(msg));
-      await stream.writeSSE({ data: msg });
-    };
-
     try {
-      await pushLog(
+      await emitLog(
+        stream,
         `Initializing Mesh Loop for Ticket: ${ticket.id}`,
-        color.gray,
+        "info",
       );
-      await pushLog(`Task: "${ticket.task}"`, color.bold);
+      console.log(
+        color.cyan(`[Mesh]`) +
+          ` ` +
+          color.gray(`Initializing Mesh Loop for Ticket: ${ticket.id}`),
+      );
+      await emitLog(stream, `Task: "${ticket.task}"`, "info");
+      console.log(
+        color.cyan(`[Mesh]`) + ` ` + color.bold(`Task: "${ticket.task}"`),
+      );
 
       // Build workspace context for agent awareness
       let contextString = "";
@@ -258,14 +292,29 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
         if (historyBlock) {
           contextString = historyBlock + contextString;
         }
-        await pushLog(
+        console.log(
+          color.cyan(`[Mesh]`) +
+            ` ` +
+            color.cyan(
+              `[Context] Workspace scanned: ${wsContext.profile.framework} / ${wsContext.profile.language}`,
+            ),
+        );
+        await emitLog(
+          stream,
           `[Context] Workspace scanned: ${wsContext.profile.framework} / ${wsContext.profile.language}`,
-          color.cyan,
         );
       } catch (scanError: any) {
-        await pushLog(
+        console.log(
+          color.cyan(`[Mesh]`) +
+            ` ` +
+            color.yellow(
+              `[Context] Workspace scan failed: ${scanError.message}. Agents will work with empty context.`,
+            ),
+        );
+        await emitLog(
+          stream,
           `[Context] Workspace scan failed: ${scanError.message}. Agents will work with empty context.`,
-          color.yellow,
+          "warn",
         );
         contextString = historyBlock || "";
       }
@@ -276,9 +325,16 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
 
       // Ops mode: skip orchestrator, create direct plan for ops agent only
       if (mode === "ops") {
-        await pushLog(
+        console.log(
+          color.cyan(`[Mesh]`) +
+            ` ` +
+            color.magenta(
+              `[Ops Mode] Bypassing orchestrator - direct ops agent dispatch...`,
+            ),
+        );
+        await emitLog(
+          stream,
           `[Ops Mode] Bypassing orchestrator - direct ops agent dispatch...`,
-          color.magenta,
         );
         plan = {
           content: {
@@ -295,9 +351,16 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
         };
         // No orchestrator tokens for ops mode
       } else {
-        await pushLog(
+        console.log(
+          color.cyan(`[Mesh]`) +
+            ` ` +
+            color.magenta(
+              `[Tier 1 Orchestrator] Analyzing request and planning constraints (mode: ${mode})...`,
+            ),
+        );
+        await emitLog(
+          stream,
           `[Tier 1 Orchestrator] Analyzing request and planning constraints (mode: ${mode})...`,
-          color.magenta,
         );
         plan = await orchestrator.planExecution(
           ticket.task,
@@ -306,9 +369,16 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
         const orchestratorTokenDetails = extractTokenDetails(plan.raw);
         orchestratorTokens += orchestratorTokenDetails.totalTokens;
         orchestratorCost += orchestratorTokenDetails.cost;
-        await pushLog(
+        console.log(
+          color.cyan(`[Mesh]`) +
+            ` ` +
+            color.green(
+              `[Tier 1 Orchestrator] Plan generated successfully. (${orchestratorTokenDetails.totalTokens} tokens, ${formatCost(orchestratorTokenDetails.cost)})`,
+            ),
+        );
+        await emitLog(
+          stream,
           `[Tier 1 Orchestrator] Plan generated successfully. (${orchestratorTokenDetails.totalTokens} tokens, ${formatCost(orchestratorTokenDetails.cost)})`,
-          color.green,
         );
       }
 
@@ -358,13 +428,26 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
 
       while (CircuitBreaker.check(ticket)) {
         try {
-          await pushLog(
-            `[Circuit Breaker] Starting Iteration ${ticket.retry_count + 1}/3...`,
-            color.yellow,
+          console.log(
+            color.cyan(`[Mesh]`) +
+              ` ` +
+              color.yellow(
+                `[Circuit Breaker] Starting Iteration ${ticket.retry_count + 1}/3...`,
+              ),
           );
-          await pushLog(
+          await emitLog(
+            stream,
+            `[Circuit Breaker] Starting Iteration ${ticket.retry_count + 1}/3...`,
+            "warn",
+          );
+          console.log(
+            color.cyan(`[Mesh]`) +
+              ` ` +
+              color.cyan(`[Control Plane] Plan: ${plan.content.summary}`),
+          );
+          await emitLog(
+            stream,
             `[Control Plane] Plan: ${plan.content.summary}`,
-            color.cyan,
           );
 
           // Build execution waves for parallel execution
@@ -372,9 +455,16 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
 
           for (let wi = 0; wi < waves.length; wi++) {
             const wave = waves[wi];
-            await pushLog(
+            console.log(
+              color.cyan(`[Mesh]`) +
+                ` ` +
+                color.cyan(
+                  `[Control Plane] Wave ${wi + 1}/${waves.length}: ${wave.map((s) => s.agent).join(", ")}`,
+                ),
+            );
+            await emitLog(
+              stream,
               `[Control Plane] Wave ${wi + 1}/${waves.length}: ${wave.map((s) => s.agent).join(", ")}`,
-              color.cyan,
             );
 
             // Execute agents in this wave in parallel
@@ -382,10 +472,20 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
               wave.map(async (step) => {
                 const { agent, description } = step;
 
-                await pushLog(
-                  `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
-                  color.magenta,
+                console.log(
+                  color.cyan(`[Mesh]`) +
+                    ` ` +
+                    color.magenta(
+                      `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
+                    ),
                 );
+                const agentStartedEvent: AgentStartedEvent = {
+                  type: "agent_started",
+                  agent,
+                  description: agentDescriptions[agent],
+                  wave: wi + 1,
+                };
+                await emitEvent(stream, agentStartedEvent);
 
                 // Build context from previous wave outputs (dependencies already resolved)
                 let context = ticket.task;
@@ -420,16 +520,36 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                     toolExecutor: executor,
                     maxIterations: 15,
                     onToolCall: async (name, input) => {
-                      await pushLog(
-                        `[Tier 2 ${agent}] Tool: ${name}(${JSON.stringify(input).slice(0, 100)})`,
-                        color.dim,
+                      console.log(
+                        color.cyan(`[Mesh]`) +
+                          ` ` +
+                          color.dim(
+                            `[Tier 2 ${agent}] Tool: ${name}(${JSON.stringify(input).slice(0, 100)})`,
+                          ),
                       );
+                      const toolCallEvent: ToolCallEvent = {
+                        type: "tool_call",
+                        agent,
+                        tool: name,
+                        input: JSON.stringify(input).slice(0, 200),
+                      };
+                      await emitEvent(stream, toolCallEvent);
                     },
                     onToolResult: async (_name, result) => {
-                      await pushLog(
-                        `[Tier 2 ${agent}] → ${result.slice(0, 150)}`,
-                        color.dim,
+                      console.log(
+                        color.cyan(`[Mesh]`) +
+                          ` ` +
+                          color.dim(
+                            `[Tier 2 ${agent}] → ${result.slice(0, 150)}`,
+                          ),
                       );
+                      const toolResultEvent: ToolResultEvent = {
+                        type: "tool_result",
+                        agent,
+                        tool: _name,
+                        result: result.slice(0, 200),
+                      };
+                      await emitEvent(stream, toolResultEvent);
                     },
                     agentType: step.agent,
                     lightweight: step.lightweight,
@@ -444,9 +564,17 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                   const agentInstance =
                     agentRegistry[agent as keyof typeof agentRegistry];
                   if (!agentInstance) {
-                    await pushLog(
+                    console.log(
+                      color.cyan(`[Mesh]`) +
+                        ` ` +
+                        color.red(
+                          `[Control Plane] Warning: Unknown agent type '${agent}'`,
+                        ),
+                    );
+                    await emitLog(
+                      stream,
                       `[Control Plane] Warning: Unknown agent type '${agent}'`,
-                      color.red,
+                      "error",
                     );
                     throw new Error(`Unknown agent type '${agent}'`);
                   }
@@ -459,11 +587,22 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                   agentCost = tokenDetails.cost;
                 }
 
-                await pushLog(
-                  `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ` +
-                    `${description} completed`,
-                  color.green,
+                console.log(
+                  color.cyan(`[Mesh]`) +
+                    ` ` +
+                    color.green(
+                      `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ` +
+                        `${description} completed`,
+                    ),
                 );
+                const agentCompletedEvent: AgentCompletedEvent = {
+                  type: "agent_completed",
+                  agent,
+                  tokens: tokenCount,
+                  cost: agentCost,
+                  duration: 0, // TODO: track actual duration
+                };
+                await emitEvent(stream, agentCompletedEvent);
 
                 return {
                   agent,
@@ -514,14 +653,21 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                   r.reason instanceof Error
                     ? r.reason.message
                     : String(r.reason);
-                await pushLog(
-                  `[Wave ${wi + 1}] Agent failed: ${reason}`,
-                  color.red,
+                console.log(
+                  color.cyan(`[Mesh]`) +
+                    ` ` +
+                    color.red(`[Wave ${wi + 1}] Agent failed: ${reason}`),
                 );
                 // Find which agent failed from the wave
                 const failedStep = wave[results.indexOf(r)];
                 if (failedStep) {
                   failedAgents.push({ agent: failedStep.agent, error: reason });
+                  const agentFailedEvent: AgentFailedEvent = {
+                    type: "agent_failed",
+                    agent: failedStep.agent,
+                    error: reason,
+                  };
+                  await emitEvent(stream, agentFailedEvent);
                 }
               }
             }
@@ -538,9 +684,17 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                 if (skippedAgents.some((s) => s.agent === downstreamAgent))
                   continue;
 
-                await pushLog(
+                console.log(
+                  color.cyan(`[Mesh]`) +
+                    ` ` +
+                    color.yellow(
+                      `[Control Plane] Skipping ${downstreamAgent} — dependency ${failed.agent} failed`,
+                    ),
+                );
+                await emitLog(
+                  stream,
                   `[Control Plane] Skipping ${downstreamAgent} — dependency ${failed.agent} failed`,
-                  color.yellow,
+                  "warn",
                 );
                 skippedAgents.push({
                   agent: downstreamAgent,
@@ -562,39 +716,53 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
             ticket.status = "awaiting-approval";
             await saveStateTicket(ticket);
 
-            await pushLog(
+            console.log(
+              color.cyan(`[Mesh]`) +
+                ` ` +
+                color.yellow(
+                  `[Approval] Generated ${fileChanges.length} file change(s). Awaiting user approval...`,
+                ),
+            );
+            await emitLog(
+              stream,
               `[Approval] Generated ${fileChanges.length} file change(s). Awaiting user approval...`,
-              color.yellow,
+              "warn",
             );
 
             // Send approval request via SSE
-            await stream.writeSSE({
-              event: "approval_request",
-              data: JSON.stringify({
-                ticketId: ticket.id,
-                files: fileChanges,
-                summary: `Generated ${fileChanges.length} file(s) by ${Object.keys(agentOutputs).join(", ")} agents`,
-              }),
-            });
+            const approvalEvent: ApprovalRequestedEvent = {
+              type: "approval_requested",
+              ticketId: ticket.id,
+              files: fileChanges as any,
+              summary: `Generated ${fileChanges.length} file(s) by ${Object.keys(agentOutputs).join(", ")} agents`,
+            };
+            await emitEvent(stream, approvalEvent);
 
             // Wait for user approval
             let approval: ApprovalResponse;
             try {
               approval = await waitForApproval(ticket.id);
-            } catch (timeoutError) {
+            } catch (_timeoutError) {
               ticket.status = "halted";
               await saveStateTicket(ticket);
-              await pushLog(
-                `[Approval] Timeout: No response within 5 minutes. Halting.`,
-                color.red,
+              console.log(
+                color.cyan(`[Mesh]`) +
+                  ` ` +
+                  color.red(
+                    `[Approval] Timeout: No response within 5 minutes. Halting.`,
+                  ),
               );
-              await stream.writeSSE({
-                event: "error",
-                data: JSON.stringify({
-                  success: false,
-                  error: "Approval timeout",
-                }),
-              });
+              await emitLog(
+                stream,
+                `[Approval] Timeout: No response within 5 minutes. Halting.`,
+                "error",
+              );
+              const ticketFailedEvent: TicketFailedEvent = {
+                type: "ticket_failed",
+                error: "Approval timeout",
+                ticket: ticket as any,
+              };
+              await emitEvent(stream, ticketFailedEvent);
               return;
             }
 
@@ -610,9 +778,16 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                   )
                 : fileChanges;
 
-              await pushLog(
+              console.log(
+                color.cyan(`[Mesh]`) +
+                  ` ` +
+                  color.green(
+                    `[Approval] Approved. Writing ${filesToWrite.length} file(s)...`,
+                  ),
+              );
+              await emitLog(
+                stream,
                 `[Approval] Approved. Writing ${filesToWrite.length} file(s)...`,
-                color.green,
               );
 
               // Write files
@@ -621,42 +796,53 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
 
                 if (fileChange.operation === "delete") {
                   await fs.unlink(fullPath);
-                  await pushLog(
-                    `[Files] Deleted: ${fileChange.path}`,
-                    color.dim,
+                  console.log(
+                    color.cyan(`[Mesh]`) +
+                      ` ` +
+                      color.dim(`[Files] Deleted: ${fileChange.path}`),
                   );
+                  await emitLog(stream, `[Files] Deleted: ${fileChange.path}`);
                 } else {
                   await fs.mkdir(path.dirname(fullPath), { recursive: true });
                   await fs.writeFile(fullPath, fileChange.content, "utf-8");
-                  await pushLog(
-                    `[Files] Written: ${fileChange.path}`,
-                    color.dim,
+                  console.log(
+                    color.cyan(`[Mesh]`) +
+                      ` ` +
+                      color.dim(`[Files] Written: ${fileChange.path}`),
                   );
+                  await emitLog(stream, `[Files] Written: ${fileChange.path}`);
                 }
               }
 
-              await pushLog(
-                `[Files] All files written successfully.`,
-                color.green,
+              console.log(
+                color.cyan(`[Mesh]`) +
+                  ` ` +
+                  color.green(`[Files] All files written successfully.`),
               );
+              await emitLog(stream, `[Files] All files written successfully.`);
             } else {
               ticket.status = "failed";
               ticket.error = approval.reason || "User rejected changes";
               await saveStateTicket(ticket);
 
-              await pushLog(
-                `[Approval] Rejected: ${approval.reason || "No reason provided"}`,
-                color.red,
+              console.log(
+                color.cyan(`[Mesh]`) +
+                  ` ` +
+                  color.red(
+                    `[Approval] Rejected: ${approval.reason || "No reason provided"}`,
+                  ),
               );
-              await stream.writeSSE({
-                event: "error",
-                data: JSON.stringify({
-                  success: false,
-                  error: "Changes rejected by user",
-                  reason: approval.reason,
-                  ticket,
-                }),
-              });
+              await emitLog(
+                stream,
+                `[Approval] Rejected: ${approval.reason || "No reason provided"}`,
+                "error",
+              );
+              const ticketFailedEvent: TicketFailedEvent = {
+                type: "ticket_failed",
+                error: "Changes rejected by user",
+                ticket: ticket as any,
+              };
+              await emitEvent(stream, ticketFailedEvent);
               return;
             }
           }
@@ -669,9 +855,16 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
           };
           await saveStateTicket(ticket);
 
-          await pushLog(
+          console.log(
+            color.cyan(`[Mesh]`) +
+              ` ` +
+              color.cyan(
+                `[Mesh] Pipeline successfully achieved consensus. Halting.`,
+              ),
+          );
+          await emitLog(
+            stream,
             `[Mesh] Pipeline successfully achieved consensus. Halting.`,
-            color.cyan,
           );
 
           const totalTokens =
@@ -712,21 +905,34 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
             total: { tokens: totalTokens, cost: totalCost },
             model: currentModel,
           };
+
+          const ticketCompletedEvent: TicketCompletedEvent = {
+            type: "ticket_completed",
+            ticket: ticket as any,
+            usage: tokenUsage,
+          };
+          await emitEvent(stream, ticketCompletedEvent);
+
+          // Also send legacy 'done' event for backward compatibility
+          const doneEvent: DoneEvent = {
+            success: true,
+            partial: failedAgents.length > 0,
+            failedAgents,
+            skippedAgents,
+            ticket,
+            usage: tokenUsage,
+          };
           await stream.writeSSE({
             event: "done",
-            data: JSON.stringify({
-              success: true,
-              partial: failedAgents.length > 0,
-              failedAgents,
-              skippedAgents,
-              ticket,
-              usage: tokenUsage,
-            }),
+            data: JSON.stringify(doneEvent),
           });
           break;
         } catch (agentError: any) {
           const cleanMsg = cleanErrorMessage(agentError?.message);
-          await pushLog(`[Mesh Error] ${cleanMsg}`, color.red);
+          console.log(
+            color.cyan(`[Mesh]`) + ` ` + color.red(`[Mesh Error] ${cleanMsg}`),
+          );
+          await emitLog(stream, `[Mesh Error] ${cleanMsg}`, "error");
           CircuitBreaker.recordFailure(ticket, cleanMsg);
           await saveStateTicket(ticket);
 
@@ -734,27 +940,33 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
             log.error(
               `Circuit Breaker tripped: Terminal failure for ${ticket.id}.`,
             );
+            const errorEvent: ErrorEvent = {
+              success: false,
+              error: "Circuit Breaker broken: Infinite Loop Stopped.",
+            };
             await stream.writeSSE({
               event: "error",
-              data: JSON.stringify({
-                success: false,
-                error: "Circuit Breaker broken: Infinite Loop Stopped.",
-                ticket,
-              }),
+              data: JSON.stringify(errorEvent),
             });
             return;
           }
-          await pushLog(`[Mesh] Triggering fail-safe retry.`, color.yellow);
+          console.log(
+            color.cyan(`[Mesh]`) +
+              ` ` +
+              color.yellow(`[Mesh] Triggering fail-safe retry.`),
+          );
+          await emitLog(stream, `[Mesh] Triggering fail-safe retry.`, "warn");
         }
       }
     } catch (error: any) {
       log.error(`Fatal Error: ${cleanErrorMessage(error?.message)}`);
+      const errorEvent: ErrorEvent = {
+        success: false,
+        error: cleanErrorMessage(error?.message),
+      };
       await stream.writeSSE({
         event: "error",
-        data: JSON.stringify({
-          success: false,
-          error: cleanErrorMessage(error?.message),
-        }),
+        data: JSON.stringify(errorEvent),
       });
     }
   });
@@ -822,21 +1034,19 @@ app.post("/mesh/review", async (c) => {
     // Format cost for display
     const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
 
-    // Helper to log beautifully and pipe to CLI
-    const pushLog = async (
-      msg: string,
-      engineColor: (str: string) => string = color.white,
-    ) => {
-      console.log(color.cyan(`[Review]`) + ` ` + engineColor(msg));
-      await stream.writeSSE({ data: msg });
-    };
-
     try {
-      await pushLog(
-        `Starting Code Review for Ticket: ${ticket.id}`,
-        color.gray,
+      console.log(
+        color.cyan(`[Review]`) +
+          ` ` +
+          color.gray(`Starting Code Review for Ticket: ${ticket.id}`),
       );
-      await pushLog(`Review target: "${reviewTarget}"`, color.bold);
+      await emitLog(stream, `Starting Code Review for Ticket: ${ticket.id}`);
+      console.log(
+        color.cyan(`[Review]`) +
+          ` ` +
+          color.bold(`Review target: "${reviewTarget}"`),
+      );
+      await emitLog(stream, `Review target: "${reviewTarget}"`);
 
       // Build workspace context for agent awareness
       let contextString = "";
@@ -846,30 +1056,57 @@ app.post("/mesh/review", async (c) => {
           ticket.task,
         );
         contextString = formatContextForPrompt(wsContext);
-        await pushLog(
+        console.log(
+          color.cyan(`[Review]`) +
+            ` ` +
+            color.cyan(
+              `[Context] Workspace scanned: ${wsContext.profile.framework} / ${wsContext.profile.language}`,
+            ),
+        );
+        await emitLog(
+          stream,
           `[Context] Workspace scanned: ${wsContext.profile.framework} / ${wsContext.profile.language}`,
-          color.cyan,
         );
       } catch (scanError: any) {
-        await pushLog(
+        console.log(
+          color.cyan(`[Review]`) +
+            ` ` +
+            color.yellow(
+              `[Context] Workspace scan failed: ${scanError.message}. Agents will work with empty context.`,
+            ),
+        );
+        await emitLog(
+          stream,
           `[Context] Workspace scan failed: ${scanError.message}. Agents will work with empty context.`,
-          color.yellow,
+          "warn",
         );
         contextString = "";
       }
 
       const orchestrator = new OrchestratorAgent();
-      await pushLog(
+      console.log(
+        color.cyan(`[Review]`) +
+          ` ` +
+          color.magenta(`[Tier 1 Orchestrator] Analyzing review request...`),
+      );
+      await emitLog(
+        stream,
         `[Tier 1 Orchestrator] Analyzing review request...`,
-        color.magenta,
       );
       const plan: any = await orchestrator.planExecution(ticket.task, "review");
       const orchestratorTokenDetails = extractTokenDetails(plan.raw);
       orchestratorTokens += orchestratorTokenDetails.totalTokens;
       orchestratorCost += orchestratorTokenDetails.cost;
-      await pushLog(
+      console.log(
+        color.cyan(`[Review]`) +
+          ` ` +
+          color.green(
+            `[Tier 1 Orchestrator] Plan generated successfully. (${orchestratorTokenDetails.totalTokens} tokens, ${formatCost(orchestratorTokenDetails.cost)})`,
+          ),
+      );
+      await emitLog(
+        stream,
         `[Tier 1 Orchestrator] Plan generated successfully. (${orchestratorTokenDetails.totalTokens} tokens, ${formatCost(orchestratorTokenDetails.cost)})`,
-        color.green,
       );
 
       ticket.status = "in-progress";
@@ -901,10 +1138,20 @@ app.post("/mesh/review", async (c) => {
       }> = [];
 
       for (const agent of reviewAgents) {
-        await pushLog(
-          `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
-          color.magenta,
+        console.log(
+          color.cyan(`[Review]`) +
+            ` ` +
+            color.magenta(
+              `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] ${agentDescriptions[agent]}`,
+            ),
         );
+        const agentStartedEvent: AgentStartedEvent = {
+          type: "agent_started",
+          agent,
+          description: agentDescriptions[agent],
+          wave: 1,
+        };
+        await emitEvent(stream, agentStartedEvent);
 
         const agenticConfig = agenticAgentRegistry[agent];
         const useAgentic = process.env.CEREBRO_AGENTIC !== "false";
@@ -991,18 +1238,37 @@ If you find no issues, return an empty array: []`;
               // Try to parse entire content as JSON
               agentFindings = JSON.parse(content);
             }
-          } catch (parseError) {
-            await pushLog(
+          } catch (_parseError) {
+            console.log(
+              color.cyan(`[Review]`) +
+                ` ` +
+                color.yellow(
+                  `[Tier 2 ${agent}] Failed to parse findings as JSON`,
+                ),
+            );
+            await emitLog(
+              stream,
               `[Tier 2 ${agent}] Failed to parse findings as JSON`,
-              color.yellow,
+              "warn",
             );
           }
         }
 
-        await pushLog(
-          `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] Analysis complete (${tokenCount} tokens, ${formatCost(agentCost)})`,
-          color.green,
+        console.log(
+          color.cyan(`[Review]`) +
+            ` ` +
+            color.green(
+              `[Tier 2 ${agent.charAt(0).toUpperCase() + agent.slice(1)}] Analysis complete (${tokenCount} tokens, ${formatCost(agentCost)})`,
+            ),
         );
+        const agentCompletedEvent: AgentCompletedEvent = {
+          type: "agent_completed",
+          agent,
+          tokens: tokenCount,
+          cost: agentCost,
+          duration: 0,
+        };
+        await emitEvent(stream, agentCompletedEvent);
 
         // Track tokens
         if (agent === "quality") {
@@ -1021,13 +1287,12 @@ If you find no issues, return an empty array: []`;
       await saveStateTicket(ticket);
 
       // Send review result
-      await stream.writeSSE({
-        event: "review_result",
-        data: JSON.stringify({
-          findings: allFindings,
-          summary: `Found ${allFindings.length} issue(s)`,
-        }),
-      });
+      const reviewResultEvent: ReviewResultEvent = {
+        type: "review_result",
+        findings: allFindings,
+        summary: `Found ${allFindings.length} issue(s)`,
+      };
+      await emitEvent(stream, reviewResultEvent);
 
       const totalTokens = orchestratorTokens + qualityTokens + securityTokens;
       const totalCost = orchestratorCost + qualityCost + securityCost;
@@ -1049,16 +1314,24 @@ If you find no issues, return an empty array: []`;
         total: { tokens: totalTokens, cost: totalCost },
         model: currentModel,
       };
+
+      // Also send legacy 'done' event for backward compatibility
+      const doneEvent: DoneEvent = {
+        success: true,
+        ticket,
+        usage: tokenUsage,
+      };
       await stream.writeSSE({
         event: "done",
-        data: JSON.stringify({
-          success: true,
-          ticket,
-          usage: tokenUsage,
-        }),
+        data: JSON.stringify(doneEvent),
       });
 
-      await pushLog(`[Review] Analysis complete. Halting.`, color.cyan);
+      console.log(
+        color.cyan(`[Review]`) +
+          ` ` +
+          color.cyan(`[Review] Analysis complete. Halting.`),
+      );
+      await emitLog(stream, `[Review] Analysis complete. Halting.`);
     } catch (error: any) {
       log.error(`Review Fatal Error: ${cleanErrorMessage(error?.message)}`);
       await stream.writeSSE({

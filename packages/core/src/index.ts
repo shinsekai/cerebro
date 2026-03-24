@@ -1,4 +1,5 @@
 export * from "./circuitBreaker.js";
+export * from "./events.js";
 export * from "./logger.js";
 export * from "./modelConfig.js";
 export * from "./scheduler.js";
