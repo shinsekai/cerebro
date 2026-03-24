@@ -340,8 +340,55 @@ async function main() {
         }
 
         if (finalData && finalData.success) {
-          s.stop(color.green(`✔ Feature developed successfully.`));
-          console.log(color.gray(`Ticket ID: ${finalData.ticket.id}`));
+          if (finalData.partial) {
+            s.stop(color.yellow(`⚠ Feature developed with partial failures.`));
+            console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
+
+            // Show which agents succeeded, failed, and were skipped
+            console.log(color.bold(`⚠  Execution Results:`));
+
+            // Show successful agents (processed)
+            const allAgents = [
+              "frontend",
+              "backend",
+              "quality",
+              "security",
+              "tester",
+              "ops",
+            ];
+            const failedAgentSet = new Set(
+              finalData.failedAgents?.map((f: any) => f.agent) || [],
+            );
+            const skippedAgentSet = new Set(
+              finalData.skippedAgents?.map((s: any) => s.agent) || [],
+            );
+            const succeededAgents = allAgents.filter(
+              (a) => !failedAgentSet.has(a) && !skippedAgentSet.has(a),
+            );
+
+            for (const agent of succeededAgents) {
+              console.log(
+                `  ${color.green("✔")} ${color.cyan(agent)} completed`,
+              );
+            }
+
+            for (const failed of finalData.failedAgents || []) {
+              console.log(
+                `  ${color.red("✖")} ${color.cyan(failed.agent)} failed: ${color.red(failed.error)}`,
+              );
+            }
+
+            for (const skipped of finalData.skippedAgents || []) {
+              console.log(
+                `  ${color.yellow("⊘")} ${color.cyan(skipped.agent)} skipped (${color.yellow(skipped.reason)})`,
+              );
+            }
+
+            console.log();
+          } else {
+            s.stop(color.green(`✔ Feature developed successfully.`));
+            console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
+          }
 
           if (finalData.usage) {
             const u = finalData.usage;
