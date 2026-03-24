@@ -80,6 +80,112 @@ import { parseArgs } from "util";
 // Create logger for CLI component
 const log = new Logger("cli");
 
+// --- Actionable Error Messages ---
+
+interface ActionableError {
+  message: string;
+  debugHint?: string;
+}
+
+/**
+ * Converts raw error messages into actionable guidance
+ */
+function getActionableError(rawError: string): ActionableError {
+  const errorLower = rawError.toLowerCase();
+
+  // Engine connection errors
+  if (
+    errorLower.includes("econnrefused") ||
+    errorLower.includes("fetch failed") ||
+    errorLower.includes("connection refused") ||
+    errorLower.includes("engine") ||
+    errorLower.includes("localhost:8080")
+  ) {
+    return {
+      message:
+        "Engine unreachable on port 8080. Run `make dev-engine` in a separate terminal.",
+    };
+  }
+
+  // API key errors
+  if (
+    errorLower.includes("api key") ||
+    errorLower.includes("anthropic_api_key") ||
+    errorLower.includes("unauthorized") ||
+    errorLower.includes("401")
+  ) {
+    return {
+      message:
+        "Invalid ANTHROPIC_API_KEY. Set it via: export ANTHROPIC_API_KEY=sk-...",
+    };
+  }
+
+  // Database connection errors
+  if (
+    errorLower.includes("econnrefused") &&
+    (errorLower.includes("5432") ||
+      errorLower.includes("postgres") ||
+      errorLower.includes("database"))
+  ) {
+    return {
+      message: "Database unavailable. Run `make db-up` to start PostgreSQL.",
+    };
+  }
+
+  // Rate limit errors
+  if (
+    errorLower.includes("rate limit") ||
+    errorLower.includes("429") ||
+    errorLower.includes("too many requests")
+  ) {
+    return {
+      message: "API rate limited. Wait 60 seconds and retry.",
+    };
+  }
+
+  // Context too large errors
+  if (
+    errorLower.includes("context") ||
+    errorLower.includes("token") ||
+    errorLower.includes("too large") ||
+    errorLower.includes("exceeds")
+  ) {
+    return {
+      message:
+        "Context exceeds model limit. Try narrowing your task description or running `cerebro init` to index your workspace.",
+    };
+  }
+
+  // Approval timeout errors
+  if (
+    errorLower.includes("approval timeout") ||
+    errorLower.includes("timed out")
+  ) {
+    return {
+      message:
+        "No approval response in 5 minutes. Re-run the command to try again.",
+    };
+  }
+
+  // Circuit breaker errors
+  if (
+    errorLower.includes("circuit breaker") ||
+    errorLower.includes("3 retries") ||
+    errorLower.includes("infinite loop")
+  ) {
+    return {
+      message:
+        "Task failed after 3 retries. The error may require manual intervention. Check .cerebro/logs/ for details.",
+    };
+  }
+
+  // Catch-all
+  return {
+    message: `Unexpected error: ${rawError}`,
+    debugHint: "Run with CEREBRO_LOG_LEVEL=debug for details.",
+  };
+}
+
 // --- Session State Functions ---
 
 const SESSION_FILE = ".cerebro/session.json";
@@ -1098,11 +1204,12 @@ async function main() {
               s.stop(color.yellow(`⚠ Stream ended without final status.`));
             }
           } catch (err: any) {
-            s.stop(
-              color.red(
-                `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
-              ),
-            );
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            const actionableError = getActionableError(errorMsg);
+            s.stop(color.red(`✖ ${actionableError.message}`));
+            if (actionableError.debugHint) {
+              console.log(color.dim(`  ${actionableError.debugHint}`));
+            }
           }
         }
       }
@@ -1268,11 +1375,12 @@ async function main() {
               s.stop(color.yellow(`⚠ Stream ended without final status.`));
             }
           } catch (err: any) {
-            s.stop(
-              color.red(
-                `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
-              ),
-            );
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            const actionableError = getActionableError(errorMsg);
+            s.stop(color.red(`✖ ${actionableError.message}`));
+            if (actionableError.debugHint) {
+              console.log(color.dim(`  ${actionableError.debugHint}`));
+            }
           }
         }
         break;
@@ -1498,11 +1606,12 @@ async function main() {
             );
           }
         } catch (err: any) {
-          s.stop(
-            color.red(
-              `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
-            ),
-          );
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          const actionableError = getActionableError(errorMsg);
+          s.stop(color.red(`✖ ${actionableError.message}`));
+          if (actionableError.debugHint) {
+            console.log(color.dim(`  ${actionableError.debugHint}`));
+          }
         }
         break;
       case "ops":
@@ -1611,11 +1720,12 @@ async function main() {
             s.stop(color.yellow(`⚠ Stream ended without final status.`));
           }
         } catch (err: any) {
-          s.stop(
-            color.red(
-              `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
-            ),
-          );
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          const actionableError = getActionableError(errorMsg);
+          s.stop(color.red(`✖ ${actionableError.message}`));
+          if (actionableError.debugHint) {
+            console.log(color.dim(`  ${actionableError.debugHint}`));
+          }
         }
         break;
       // biome-ignore lint/suspicious/noFallthroughSwitchClause: case exits via process.exit()
@@ -1786,4 +1896,12 @@ async function main() {
   }
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  const errorMsg = err instanceof Error ? err.message : String(err);
+  const actionableError = getActionableError(errorMsg);
+  console.error(color.red(`\n✖ ${actionableError.message}`));
+  if (actionableError.debugHint) {
+    console.error(color.dim(`  ${actionableError.debugHint}`));
+  }
+  process.exit(1);
+});
