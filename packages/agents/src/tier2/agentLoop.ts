@@ -34,6 +34,9 @@ export const AgentLoopResultSchema = z.object({
   pendingWrites: z.array(z.custom<FileChange>()),
   iterations: z.number().int().min(0),
   completeSummary: z.string().nullable(),
+  totalTokens: z.number().int().min(0),
+  inputTokens: z.number().int().min(0),
+  outputTokens: z.number().int().min(0),
 });
 
 export type AgentLoopResult = z.infer<typeof AgentLoopResultSchema>;
@@ -95,6 +98,9 @@ export async function runAgentLoop(
   const toolCallHistory: ToolCallHistory[] = [];
   let iterations = 0;
   let completeSummary: string | null = null;
+  let totalTokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
 
   while (iterations < maxIterations) {
     iterations++;
@@ -106,13 +112,15 @@ export async function runAgentLoop(
       }
     ).usage_metadata;
 
-    // Log token usage if available
+    // Accumulate token usage
     if (usageMetadata) {
-      const { input_tokens: inputTokens = 0, output_tokens: outputTokens = 0 } =
-        usageMetadata as Record<string, number>;
-      if (inputTokens > 0 || outputTokens > 0) {
-        // Token tracking is available, could be logged here if needed
-      }
+      const {
+        input_tokens: iterInputTokens = 0,
+        output_tokens: iterOutputTokens = 0,
+      } = usageMetadata as Record<string, number>;
+      inputTokens += iterInputTokens;
+      outputTokens += iterOutputTokens;
+      totalTokens += iterInputTokens + iterOutputTokens;
     }
 
     // Handle response content (can be string or array of blocks)
@@ -176,6 +184,9 @@ export async function runAgentLoop(
     pendingWrites: toolExecutor.getPendingWrites(),
     iterations,
     completeSummary,
+    totalTokens,
+    inputTokens,
+    outputTokens,
   };
 }
 
