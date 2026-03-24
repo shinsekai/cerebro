@@ -37,3 +37,4 @@ bun-error.log*
 .vercel
 .vscode/
 apps/cli/cerebro
+.cerebro/
