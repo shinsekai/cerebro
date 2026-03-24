@@ -1,4 +1,8 @@
-import { type ExecutionPlan, ExecutionPlanSchema } from "@cerebro/core";
+import {
+  type ExecutionPlan,
+  ExecutionPlanSchema,
+  getModelForAgent,
+} from "@cerebro/core";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { PromptTemplate } from "@langchain/core/prompts";
 
@@ -7,7 +11,7 @@ export class OrchestratorAgent {
 
   constructor() {
     this.model = new ChatAnthropic({
-      model: process.env.ANTHROPIC_MODEL || "claude-opus-4-6",
+      model: getModelForAgent("orchestrator"),
       temperature: 0,
       apiKey: process.env.ANTHROPIC_API_KEY || "not_provided",
     });
