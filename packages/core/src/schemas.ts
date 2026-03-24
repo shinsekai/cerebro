@@ -63,6 +63,7 @@ export const FileChangeSchema = z.object({
   content: z.string(),
   operation: z.enum(["create", "update", "delete"]),
   isNew: z.boolean().default(true),
+  diff: z.string().optional(),
 });
 
 export type FileChange = z.infer<typeof FileChangeSchema>;
