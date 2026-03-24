@@ -73,7 +73,7 @@ import { randomUUID } from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import color from "picocolors";
-import { chdir, cwd } from "process";
+import { cwd } from "process";
 import { parseArgs } from "util";
 
 // --- Session State Functions ---
@@ -436,6 +436,9 @@ async function main() {
       `  ${color.cyan("ops")}                 Design robust 12-factor Cloud Infrastructure`,
     );
     console.log(
+      `  ${color.cyan("chat")}                Open persistent REPL for iterative development`,
+    );
+    console.log(
       `  ${color.cyan("help")}                Show this interactive help message\n`,
     );
     console.log(`${color.bold("Options:")}`);
@@ -462,6 +465,7 @@ async function main() {
           { value: "fix", label: "Fix a bug or issue" },
           { value: "review", label: "Review code / PR" },
           { value: "ops", label: "Perform Infrastructure Tasks" },
+          { value: "chat", label: "Open Chat REPL" },
           { value: "quit", label: "Quit" },
         ],
       })) as string;
@@ -680,6 +684,185 @@ async function main() {
         action = null;
         taskDesc = null;
         continue;
+      }
+      case "chat": {
+        const workspaceRoot = await findWorkspaceRoot(cwd());
+        const sessionHistory: Array<{
+          task: string;
+          agentOutputs: Record<string, string>;
+          fileChanges: string[];
+        }> = [];
+
+        console.log(
+          color.bold(`\n${color.bgCyan(color.black(" Cerebro Chat "))}`),
+        );
+        console.log(
+          color.dim(
+            "Type your requests, 'exit' or 'quit' to end the session\n",
+          ),
+        );
+
+        while (true) {
+          const input = (await text({
+            message: color.cyan(">"),
+            placeholder: "e.g., Add a login page",
+          })) as string;
+
+          if (isCancel(input)) {
+            outro("Goodbye!");
+            process.exit(0);
+          }
+
+          const trimmedInput = input.trim();
+
+          if (
+            trimmedInput.toLowerCase() === "exit" ||
+            trimmedInput.toLowerCase() === "quit"
+          ) {
+            // Save session state on exit
+            if (sessionHistory.length > 0) {
+              const lastExchange = sessionHistory[sessionHistory.length - 1];
+              await saveSession(workspaceRoot, {
+                lastTicketId: randomUUID(),
+                lastTask: lastExchange.task,
+                agentOutputs: lastExchange.agentOutputs,
+                fileChanges: lastExchange.fileChanges,
+              });
+              console.log(
+                color.dim(
+                  `\nSession saved with ${sessionHistory.length} exchange(s)\n`,
+                ),
+              );
+            }
+            outro("Goodbye!");
+            process.exit(0);
+          }
+
+          if (!trimmedInput) continue;
+
+          const s = spinner();
+          s.start(`Processing: ${trimmedInput.slice(0, 40)}...`);
+
+          try {
+            const { success, data: finalData } = await streamEngineResponse({
+              url: "http://localhost:8080/mesh/loop",
+              body: {
+                id: randomUUID(),
+                task: trimmedInput,
+                retry_count: 0,
+                status: "pending",
+                workspaceRoot,
+                mode: "chat",
+                previousContext:
+                  sessionHistory.length > 0
+                    ? {
+                        task: sessionHistory[sessionHistory.length - 1].task,
+                        agentOutputs:
+                          sessionHistory[sessionHistory.length - 1]
+                            .agentOutputs,
+                        fileChanges:
+                          sessionHistory[sessionHistory.length - 1].fileChanges,
+                      }
+                    : undefined,
+              },
+              spinner: s,
+            });
+
+            if (success) {
+              // Append this exchange to session history
+              sessionHistory.push({
+                task: trimmedInput,
+                agentOutputs: finalData.ticket.context?.outputs || {},
+                fileChanges: finalData.ticket.context?.fileChanges || [],
+              });
+
+              if (finalData.partial) {
+                s.stop(color.yellow(`⚠ Completed with partial failures.`));
+                console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
+
+                const allAgents = [
+                  "frontend",
+                  "backend",
+                  "quality",
+                  "security",
+                  "tester",
+                  "ops",
+                ];
+                const failedAgentSet = new Set(
+                  finalData.failedAgents?.map((f: any) => f.agent) || [],
+                );
+                const skippedAgentSet = new Set(
+                  finalData.skippedAgents?.map((s: any) => s.agent) || [],
+                );
+                const succeededAgents = allAgents.filter(
+                  (a) => !failedAgentSet.has(a) && !skippedAgentSet.has(a),
+                );
+
+                for (const agent of succeededAgents) {
+                  console.log(
+                    `  ${color.green("✔")} ${color.cyan(agent)} completed`,
+                  );
+                }
+
+                for (const failed of finalData.failedAgents || []) {
+                  console.log(
+                    `  ${color.red("✖")} ${color.cyan(failed.agent)} failed: ${color.red(failed.error)}`,
+                  );
+                }
+
+                for (const skipped of finalData.skippedAgents || []) {
+                  console.log(
+                    `  ${color.yellow("⊘")} ${color.cyan(skipped.agent)} skipped (${color.yellow(skipped.reason)})`,
+                  );
+                }
+                console.log();
+              } else {
+                s.stop(color.green(`✔ Completed successfully.`));
+                console.log(color.gray(`Ticket ID: ${finalData.ticket.id}\n`));
+              }
+
+              if (finalData.usage) {
+                const u = finalData.usage;
+                console.log(color.cyan(`📊 Token Consumption:`));
+                console.log(
+                  `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
+                );
+                console.log(
+                  `  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`,
+                );
+                console.log(
+                  `  Backend      : ${color.yellow(u.backend?.tokens)} tokens`,
+                );
+                console.log(
+                  `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
+                );
+                console.log(
+                  `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
+                );
+                console.log(
+                  `  Tester       : ${color.yellow(u.tester?.tokens)} tokens`,
+                );
+                console.log(
+                  `  Ops          : ${color.yellow(u.ops?.tokens)} tokens`,
+                );
+                console.log(color.dim(`  -----------------------`));
+                console.log(
+                  `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
+                );
+              }
+            } else if (finalData) {
+              s.stop(color.red(`✖ Failed: ${finalData.error}`));
+            } else {
+              s.stop(color.yellow(`⚠ Stream ended without final status.`));
+            }
+          } catch (err: any) {
+            s.stop(
+              color.red(
+                `✖ Engine Unreachable: Ensure Cerebro Engine is running on port 8080.`,
+              ),
+            );
+          }
+        }
       }
       case "develop":
       case "fix":

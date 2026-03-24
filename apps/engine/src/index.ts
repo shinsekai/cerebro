@@ -297,7 +297,7 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
         );
         plan = await orchestrator.planExecution(
           ticket.task,
-          mode as "develop" | "fix" | "review" | "ops",
+          mode as "develop" | "fix" | "review" | "ops" | "chat",
         );
         const orchestratorTokenDetails = extractTokenDetails(plan.raw);
         orchestratorTokens += orchestratorTokenDetails.totalTokens;
@@ -421,7 +421,7 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                         color.dim,
                       );
                     },
-                    onToolResult: async (name, result) => {
+                    onToolResult: async (_name, result) => {
                       await pushLog(
                         `[Tier 2 ${agent}] → ${result.slice(0, 150)}`,
                         color.dim,

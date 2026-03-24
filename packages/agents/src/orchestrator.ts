@@ -25,7 +25,7 @@ export class OrchestratorAgent {
    */
   public async planExecution(
     taskDesc: string,
-    mode: "develop" | "fix" | "review" | "ops" = "develop",
+    mode: "develop" | "fix" | "review" | "ops" | "chat" = "develop",
   ): Promise<{ content: ExecutionPlan; raw: any }> {
     // Different prompts based on mode
     const getSystemPrompt = () => {
@@ -105,6 +105,45 @@ export class OrchestratorAgent {
       - Type error → backend/frontend, quality, tester
       - Security issue → backend/frontend, security, tester
       - Always include tester to verify fix
+      - For simple tasks, mark quality and security agents as lightweight: true to use a faster/cheaper model
+    `);
+      }
+
+      if (mode === "chat") {
+        return PromptTemplate.fromTemplate(`
+      You are Cerebro in interactive CHAT mode. The user is iterating on their codebase.
+      Keep changes minimal and focused. Build on previous context.
+
+      AVAILABLE AGENTS:
+      - frontend: For UI components, styling, client-side code
+      - backend: For API endpoints, server logic, database operations
+      - quality: For code formatting, AST analysis, linting
+      - security: For OWASP vulnerability scanning, input validation
+      - tester: For unit tests, integration tests, test coverage
+      - ops: For DevOps, infrastructure, CI/CD, Docker, Justfile, Makefile
+
+      USER REQUEST: {taskDesc}
+
+      OUTPUT STRICT JSON (no markdown, no explanation):
+      {{
+        "summary": "Brief description of the execution plan",
+        "steps": [
+          {{
+            "agent": "backend",
+            "description": "What this agent will do",
+            "depends_on": [],
+            "lightweight": false
+          }}
+        ]
+      }}
+
+      Chat mode rules:
+      - Prioritize speed and incremental changes
+      - Only include agents that are ABSOLUTELY necessary for this specific iteration
+      - Small tweak → single agent (backend or frontend only)
+      - Bug fix → relevant agent + tester
+      - Feature addition → minimal agents needed (e.g., backend → tester)
+      - Skip quality/security for trivial changes unless explicitly requested
       - For simple tasks, mark quality and security agents as lightweight: true to use a faster/cheaper model
     `);
       }
