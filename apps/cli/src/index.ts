@@ -8,6 +8,59 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
+
+/**
+ * Render a colored unified diff line
+ */
+function renderDiffLine(line: string): string {
+  if (line.startsWith("@@")) {
+    return color.cyan(line); // Hunk headers
+  } else if (line.startsWith("+")) {
+    return color.green(line); // Additions
+  } else if (line.startsWith("-")) {
+    return color.red(line); // Deletions
+  } else if (line.startsWith("---") || line.startsWith("+++")) {
+    return color.cyan(line); // File headers
+  } else {
+    return color.gray(line); // Context
+  }
+}
+
+/**
+ * Display file content or diff
+ */
+function displayFileContent(file: {
+  path: string;
+  operation: string;
+  content: string;
+  diff?: string;
+}) {
+  console.log(
+    color.dim(`  ${file.operation} ${file.content.length} characters`),
+  );
+  console.log(color.dim("─".repeat(50)));
+
+  if (file.operation === "update" && file.diff) {
+    // Display colored unified diff for updates
+    const lines = file.diff.split("\n");
+    if (lines.length > 20) {
+      console.log(lines.slice(0, 20).map(renderDiffLine).join("\n"));
+      console.log(color.dim(`... (${lines.length - 20} more lines)`));
+    } else {
+      console.log(lines.map(renderDiffLine).join("\n"));
+    }
+  } else {
+    // Display full content for creates or when diff is missing
+    const lines = file.content.split("\n");
+    if (lines.length > 20) {
+      console.log(color.gray(lines.slice(0, 20).join("\n")));
+      console.log(color.dim(`... (${lines.length - 20} more lines)`));
+    } else {
+      console.log(color.gray(lines.join("\n")));
+    }
+  }
+  console.log(color.dim("─".repeat(50) + "\n"));
+}
 import { randomUUID } from "crypto";
 import fs from "fs/promises";
 import path from "path";
@@ -111,24 +164,38 @@ async function streamEngineResponse(payload: {
                         : color.yellow("~");
 
                   console.log(`${operationIcon} ${color.cyan(file.path)}`);
-                  console.log(
-                    color.dim(
-                      `  ${file.operation} ${file.content.length} characters`,
-                    ),
-                  );
-                  console.log(color.dim("─".repeat(50)));
+                  displayFileContent(file);
 
-                  // Display file content preview
-                  const lines = file.content.split("\n");
-                  if (lines.length > 20) {
-                    console.log(color.gray(lines.slice(0, 20).join("\n")));
-                    console.log(
-                      color.dim(`... (${lines.length - 20} more lines)`),
-                    );
-                  } else {
-                    console.log(color.gray(lines.join("\n")));
+                  // For updates with diff, offer to view full file
+                  if (file.operation === "update" && file.diff) {
+                    const viewFull = await text({
+                      message: "View full file instead of diff? (y/N)",
+                      placeholder: "",
+                    });
+
+                    if (
+                      typeof viewFull === "string" &&
+                      viewFull.toLowerCase() === "y" &&
+                      !isCancel(viewFull)
+                    ) {
+                      console.log(
+                        color.bold(
+                          `\n${color.cyan(file.path)} — Full Content\n`,
+                        ),
+                      );
+                      console.log(color.dim("─".repeat(50)));
+                      const lines = file.content.split("\n");
+                      if (lines.length > 20) {
+                        console.log(color.gray(lines.slice(0, 20).join("\n")));
+                        console.log(
+                          color.dim(`... (${lines.length - 20} more lines)`),
+                        );
+                      } else {
+                        console.log(color.gray(lines.join("\n")));
+                      }
+                      console.log(color.dim("─".repeat(50) + "\n"));
+                    }
                   }
-                  console.log(color.dim("─".repeat(50) + "\n"));
                 }
 
                 // Ask user for approval
