@@ -23,6 +23,7 @@ import {
   type FileChange,
   getDownstreamAgents,
   getModelForAgent,
+  Logger,
   MemoryTicketSchema,
   StateTicketSchema,
 } from "@cerebro/core";
@@ -47,6 +48,9 @@ import color from "picocolors";
 const app = new Hono();
 
 app.use("*", logger());
+
+// Create logger for engine component
+const log = new Logger("engine");
 
 // In-memory approval state storage
 const approvalResponses = new Map<string, ApprovalResponse>();
@@ -727,8 +731,8 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
           await saveStateTicket(ticket);
 
           if ((ticket.status as string) === "halted") {
-            console.error(
-              `[Mesh] Circuit Breaker tripped: Terminal failure for ${ticket.id}.`,
+            log.error(
+              `Circuit Breaker tripped: Terminal failure for ${ticket.id}.`,
             );
             await stream.writeSSE({
               event: "error",
@@ -744,7 +748,7 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
         }
       }
     } catch (error: any) {
-      console.error(color.red(`[Mesh] Fatal Error:`), error);
+      log.error(`Fatal Error: ${cleanErrorMessage(error?.message)}`);
       await stream.writeSSE({
         event: "error",
         data: JSON.stringify({
@@ -1056,7 +1060,7 @@ If you find no issues, return an empty array: []`;
 
       await pushLog(`[Review] Analysis complete. Halting.`, color.cyan);
     } catch (error: any) {
-      console.error(color.red(`[Review] Fatal Error:`), error);
+      log.error(`Review Fatal Error: ${cleanErrorMessage(error?.message)}`);
       await stream.writeSSE({
         event: "error",
         data: JSON.stringify({

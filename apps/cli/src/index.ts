@@ -8,6 +8,7 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
+import { Logger } from "@cerebro/core";
 
 /**
  * Render a colored unified diff line
@@ -75,6 +76,9 @@ import path from "path";
 import color from "picocolors";
 import { cwd } from "process";
 import { parseArgs } from "util";
+
+// Create logger for CLI component
+const log = new Logger("cli");
 
 // --- Session State Functions ---
 
@@ -204,10 +208,7 @@ async function streamEngineResponse(payload: {
                   const reviewData = JSON.parse(fullData);
                   payload.onReviewResult(reviewData);
                 } catch (error) {
-                  console.error(
-                    color.red("Error processing review result:"),
-                    error,
-                  );
+                  log.error(`Error processing review result: ${error}`);
                 }
               }
             } else if (currentEvent === "approval_request") {
@@ -334,7 +335,7 @@ async function streamEngineResponse(payload: {
                 );
 
                 if (!approvalRes.ok) {
-                  console.error(color.red("Failed to send approval response"));
+                  log.error("Failed to send approval response");
                   process.exit(1);
                 }
 
@@ -343,10 +344,7 @@ async function streamEngineResponse(payload: {
                   `Processing ${approved ? "approved" : "rejected"} changes...`,
                 );
               } catch (error) {
-                console.error(
-                  color.red("Error processing approval request:"),
-                  error,
-                );
+                log.error(`Error processing approval request: ${error}`);
                 process.exit(1);
               }
             } else {
