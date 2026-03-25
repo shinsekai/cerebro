@@ -7,7 +7,6 @@ import {
 } from "@cerebro/database";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
-import type { ApprovalResponse } from "@cerebro/core";
 import {
   handlePostState,
   handleGetState,
@@ -21,51 +20,17 @@ import {
 import {
   handleMeshLoop,
   type MeshControllerDeps,
-  type ApprovalState,
 } from "./controllers/meshController.js";
 import { handleMeshReview, type ReviewControllerDeps } from "./controllers/reviewController.js";
 import {
   handleMeshApprove,
   type ApprovalControllerDeps,
 } from "./controllers/approvalController.js";
+import { approvalService } from "./services/approvalService.js";
 
 const app = new Hono();
 
 app.use("*", logger());
-
-// --- In-memory state ---
-
-// In-memory approval state storage
-const approvalResponses = new Map<string, ApprovalResponse>();
-
-// Store workspace root per ticket
-const ticketWorkspaceRoots = new Map<string, string>();
-
-// Helper to wait for user approval
-const waitForApproval = async (
-  ticketId: string,
-  timeoutMs = 300000,
-): Promise<ApprovalResponse> => {
-  return new Promise((resolve, reject) => {
-    const checkInterval = setInterval(() => {
-      const response = approvalResponses.get(ticketId);
-      if (response) {
-        clearInterval(checkInterval);
-        approvalResponses.delete(ticketId);
-        resolve(response);
-      }
-    }, 500);
-
-    setTimeout(() => {
-      clearInterval(checkInterval);
-      reject(
-        new Error(
-          "No approval response in 5 minutes. Re-run the command to try again.",
-        ),
-      );
-    }, timeoutMs);
-  });
-};
 
 // --- Controller Dependencies ---
 
@@ -87,20 +52,12 @@ const reviewDeps: ReviewControllerDeps = {
   saveStateTicket,
 };
 
-const approvalState: ApprovalState = {
-  approvalResponses,
-  ticketWorkspaceRoots,
-};
-
 const meshOptions = {
-  approvalState,
+  approvalService,
   deps: meshDeps,
-  waitForApproval,
 };
 
-const approvalDeps: ApprovalControllerDeps = {
-  approvalResponses,
-};
+const approvalDeps: ApprovalControllerDeps = {};
 
 // --- Routes ---
 
