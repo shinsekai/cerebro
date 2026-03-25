@@ -3,9 +3,11 @@ import type { Spinner } from "@clack/prompts";
 import color from "picocolors";
 import { streamEngineResponse } from "../lib/stream.js";
 import { findWorkspaceRoot } from "../lib/workspace.js";
+import { renderTokenSummary } from "../ui/display.js";
 
 export async function runOps(taskDesc: string, s: Spinner): Promise<void> {
   const opsWorkspaceRoot = await findWorkspaceRoot(process.cwd());
+  const startTime = Date.now();
   const { success, data: finalData } = await streamEngineResponse({
     url: "http://localhost:8080/mesh/loop",
     body: {
@@ -69,25 +71,7 @@ export async function runOps(taskDesc: string, s: Spinner): Promise<void> {
     }
 
     if (finalData.usage) {
-      const u = finalData.usage;
-      console.log(color.cyan(`\n📊 Token Consumption:`));
-      console.log(
-        `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
-      );
-      console.log(
-        `  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`,
-      );
-      console.log(`  Backend      : ${color.yellow(u.backend?.tokens)} tokens`);
-      console.log(`  Quality      : ${color.yellow(u.quality?.tokens)} tokens`);
-      console.log(
-        `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
-      );
-      console.log(`  Tester       : ${color.yellow(u.tester?.tokens)} tokens`);
-      console.log(`  Ops          : ${color.yellow(u.ops?.tokens)} tokens`);
-      console.log(color.dim(`  -----------------------`));
-      console.log(
-        `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
-      );
+      renderTokenSummary(finalData.usage, startTime);
     }
   } else if (finalData) {
     s.stop(color.red(`✖ Failed: ${finalData.error}`));

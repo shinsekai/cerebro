@@ -5,6 +5,7 @@ import { getActionableError } from "../lib/errors.js";
 import { clearSession, loadSession, saveSession } from "../lib/session.js";
 import { streamEngineResponse } from "../lib/stream.js";
 import { findWorkspaceRoot } from "../lib/workspace.js";
+import { renderTokenSummary } from "../ui/display.js";
 
 export interface DevelopOptions {
   taskDesc: string;
@@ -49,6 +50,7 @@ export async function runDevelop(options: DevelopOptions): Promise<void> {
   }
 
   try {
+    const startTime = Date.now();
     const { success, data: finalData } = await streamEngineResponse({
       url: "http://localhost:8080/mesh/loop",
       body: {
@@ -138,31 +140,7 @@ export async function runDevelop(options: DevelopOptions): Promise<void> {
       }
 
       if (finalData.usage) {
-        const u = finalData.usage;
-        console.log(color.cyan(`\n📊 Token Consumption:`));
-        console.log(
-          `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
-        );
-        console.log(
-          `  Frontend     : ${color.yellow(u.frontend?.tokens)} tokens`,
-        );
-        console.log(
-          `  Backend      : ${color.yellow(u.backend?.tokens)} tokens`,
-        );
-        console.log(
-          `  Quality      : ${color.yellow(u.quality?.tokens)} tokens`,
-        );
-        console.log(
-          `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
-        );
-        console.log(
-          `  Tester       : ${color.yellow(u.tester?.tokens)} tokens`,
-        );
-        console.log(`  Ops          : ${color.yellow(u.ops?.tokens)} tokens`);
-        console.log(color.dim(`  -----------------------`));
-        console.log(
-          `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
-        );
+        renderTokenSummary(finalData.usage, startTime);
       }
     } else if (finalData) {
       options.spinnerInstance.stop(color.red(`✖ Failed: ${finalData.error}`));

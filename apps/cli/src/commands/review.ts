@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { DoneEvent, ErrorEvent } from "@cerebro/core";
 import { confirm, isCancel, spinner, text } from "@clack/prompts";
 import color from "picocolors";
 import { streamEngineResponse } from "../lib/stream.js";
 import { findWorkspaceRoot } from "../lib/workspace.js";
-import type { DoneEvent, ErrorEvent } from "@cerebro/core";
+import { renderTokenSummary } from "../ui/display.js";
 
 function isDoneEvent(data: DoneEvent | ErrorEvent | null): data is DoneEvent {
   return data !== null && data.success === true;
@@ -123,6 +124,7 @@ export async function runReview(
     `Analyzing ${diff.includes("git") ? "git diff" : "workspace"} for quality and security issues...`,
   );
 
+  const startTime = Date.now();
   const { success, data: finalData } = await streamEngineResponse({
     url: "http://localhost:8080/mesh/review",
     body: {
@@ -209,19 +211,7 @@ export async function runReview(
     console.log(color.gray(`Ticket ID: ${finalData.ticket?.id}\n`));
 
     if (isDoneEvent(finalData) && finalData.usage) {
-      const u = finalData.usage;
-      console.log(color.cyan(`\n📊 Token Consumption:`));
-      console.log(
-        `  Orchestrator : ${color.yellow(u.orchestrator?.tokens)} tokens`,
-      );
-      console.log(`  Quality      : ${color.yellow(u.quality?.tokens)} tokens`);
-      console.log(
-        `  Security     : ${color.yellow(u.security?.tokens)} tokens`,
-      );
-      console.log(color.dim(`  -----------------------`));
-      console.log(
-        `  Total        : ${color.magenta(u.total?.tokens)} tokens\n`,
-      );
+      renderTokenSummary(finalData.usage, startTime);
     }
   } else if (finalData) {
     reviewSpinner.stop(color.red(`✖ Failed: ${finalData.error}`));
