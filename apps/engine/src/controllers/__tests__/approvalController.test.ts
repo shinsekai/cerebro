@@ -3,17 +3,16 @@ import {
   handleMeshApprove,
   type ApprovalControllerDeps,
 } from "../approvalController.js";
+import { approvalService } from "../../services/approvalService.js";
 import type { ApprovalResponse } from "@cerebro/core";
 
 describe("approvalController", () => {
-  let approvalResponses: Map<string, ApprovalResponse>;
   let deps: ApprovalControllerDeps;
 
   beforeEach(() => {
-    approvalResponses = new Map<string, ApprovalResponse>();
-    deps = {
-      approvalResponses,
-    };
+    // Clear approvalService state before each test
+    approvalService.clear();
+    deps = {};
   });
 
   describe("POST /mesh/approve", () => {
@@ -40,7 +39,7 @@ describe("approvalController", () => {
       });
 
       // Verify the approval was stored
-      expect(approvalResponses.get(mockApproval.ticketId)).toEqual(mockApproval);
+      expect(await approvalService.waitForApproval(mockApproval.ticketId)).toEqual(mockApproval);
     });
 
     it("should record approval with rejected files", async () => {
@@ -65,7 +64,7 @@ describe("approvalController", () => {
       expect(responseData.success).toBe(true);
 
       // Verify the approval was stored correctly
-      const stored = approvalResponses.get(mockApproval.ticketId);
+      const stored = await approvalService.waitForApproval(mockApproval.ticketId);
       expect(stored?.approved).toBe(true);
       expect(stored?.rejectedFiles).toEqual(["src/file1.ts", "src/file2.ts"]);
       expect(stored?.reason).toBe("Some files need changes");
@@ -92,7 +91,7 @@ describe("approvalController", () => {
       expect(responseData.success).toBe(true);
 
       // Verify the rejection was stored
-      const stored = approvalResponses.get(mockApproval.ticketId);
+      const stored = await approvalService.waitForApproval(mockApproval.ticketId);
       expect(stored?.approved).toBe(false);
       expect(stored?.reason).toBe("Not satisfied with changes");
     });
@@ -118,7 +117,7 @@ describe("approvalController", () => {
       expect(responseData.error).toBeDefined();
 
       // Verify nothing was stored
-      expect(approvalResponses.size).toBe(0);
+      expect(approvalService.getPendingCount()).toBe(0);
     });
 
     it("should return 400 with missing ticketId", async () => {
@@ -141,7 +140,7 @@ describe("approvalController", () => {
       expect(responseData.error).toBeDefined();
 
       // Verify nothing was stored
-      expect(approvalResponses.size).toBe(0);
+      expect(approvalService.getPendingCount()).toBe(0);
     });
 
     it("should return 400 with missing approved field", async () => {
@@ -164,7 +163,7 @@ describe("approvalController", () => {
       expect(responseData.error).toBeDefined();
 
       // Verify nothing was stored
-      expect(approvalResponses.size).toBe(0);
+      expect(approvalService.getPendingCount()).toBe(0);
     });
 
     it("should store multiple approvals independently", async () => {
@@ -178,6 +177,10 @@ describe("approvalController", () => {
         approved: false,
         reason: "Different ticket",
       };
+
+      // Start waiting for both approvals first
+      const wait1 = approvalService.waitForApproval(approval1.ticketId);
+      const wait2 = approvalService.waitForApproval(approval2.ticketId);
 
       // Mock Hono context for first approval
       const mockC1 = {
@@ -198,10 +201,10 @@ describe("approvalController", () => {
       await handleMeshApprove(mockC1 as any, deps);
       await handleMeshApprove(mockC2 as any, deps);
 
-      // Verify both are stored
-      expect(approvalResponses.size).toBe(2);
-      expect(approvalResponses.get(approval1.ticketId)?.approved).toBe(true);
-      expect(approvalResponses.get(approval2.ticketId)?.approved).toBe(false);
+      // Verify both are received correctly
+      const [result1, result2] = await Promise.all([wait1, wait2]);
+      expect(result1?.approved).toBe(true);
+      expect(result2?.approved).toBe(false);
     });
   });
 });

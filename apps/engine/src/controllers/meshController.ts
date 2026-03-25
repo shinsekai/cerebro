@@ -20,6 +20,7 @@ import {
   getPricingForModel,
 } from "../services/pricing.js";
 import { TokenTracker } from "../services/tokenTracker.js";
+import { approvalService } from "../services/approvalService.js";
 import {
   type AgentCompletedEvent,
   type AgentFailedEvent,
@@ -54,20 +55,13 @@ export interface MeshControllerDeps {
   saveStateTicket: (ticket: any) => Promise<any>;
 }
 
-export interface ApprovalState {
-  approvalResponses: Map<string, ApprovalResponse>;
-  ticketWorkspaceRoots: Map<string, string>;
-}
-
 export interface MeshControllerOptions {
-  approvalState: ApprovalState;
   deps: MeshControllerDeps;
-  waitForApproval: (ticketId: string, timeoutMs?: number) => Promise<ApprovalResponse>;
+  approvalService: typeof approvalService;
 }
 
 export async function handleMeshLoop(c: any, options: MeshControllerOptions): Promise<Response> {
-  const { approvalState, deps, waitForApproval } = options;
-  const { approvalResponses, ticketWorkspaceRoots } = approvalState;
+  const { deps, approvalService } = options;
   const log = getLog();
 
   return streamSSE(c, async (stream) => {
@@ -93,7 +87,7 @@ export async function handleMeshLoop(c: any, options: MeshControllerOptions): Pr
 
       // Store workspace root for this ticket (from CLI or default to current working dir)
       const workspaceRoot = (body as any).workspaceRoot || process.cwd();
-      ticketWorkspaceRoots.set(ticket.id, workspaceRoot);
+      approvalService.setWorkspaceRoot(ticket.id, workspaceRoot);
 
       // Extract previous context for conversation history
       const previousContext = (body as any).previousContext;
@@ -596,7 +590,7 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
             // Wait for user approval
             let approval: ApprovalResponse;
             try {
-              approval = await waitForApproval(ticket.id);
+              approval = await approvalService.waitForApproval(ticket.id);
             } catch (_timeoutError) {
               ticket.status = "halted";
               await deps.saveStateTicket(ticket);
