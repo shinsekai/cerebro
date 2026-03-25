@@ -1,21 +1,4 @@
-import {
-  type AgentCompletedEvent,
-  type AgentFailedEvent,
-  type AgentStartedEvent,
-  type CerebroEvent,
-  type ErrorEvent,
-  type LogEvent,
-  Logger,
-  StateTicketSchema,
-  type TicketFailedEvent,
-  type ToolCallEvent,
-  type ToolResultEvent,
-} from "@cerebro/core";
-import type {
-  MemoryTicket,
-  StateTicket,
-} from "@cerebro/core";
-import { type MemoryTicketSchema, type ApprovalResponseSchema } from "@cerebro/core";
+import { Logger } from "@cerebro/core";
 
 const log = new Logger("engine");
 
@@ -131,28 +114,9 @@ export function getActionableError(rawError: string): ActionableError {
 }
 
 // --- SSE Event Emission Helpers ---
+// Re-export from services/sse.ts for backward compatibility
 
-/**
- * Emit a typed SSE event to the client
- */
-export async function emitEvent(
-  stream: any,
-  event: CerebroEvent,
-): Promise<void> {
-  await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-}
-
-/**
- * Emit a legacy untyped log message (for backward compatibility)
- */
-export async function emitLog(
-  stream: any,
-  message: string,
-  level = "info",
-): Promise<void> {
-  const logEvent: LogEvent = { type: "log", message, level };
-  await emitEvent(stream, logEvent);
-}
+export { emitEvent, emitLog } from "../services/sse.js";
 
 // --- Helper to clean raw API Error JSON strings ---
 export function cleanErrorMessage(msg: string | undefined): string {

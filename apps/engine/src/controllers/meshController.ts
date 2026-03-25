@@ -15,6 +15,12 @@ import {
   testerAgent,
 } from "@cerebro/agents";
 import {
+  extractTokenDetails,
+  formatCost,
+  getPricingForModel,
+} from "../services/pricing.js";
+import { TokenTracker } from "../services/tokenTracker.js";
+import {
   type AgentCompletedEvent,
   type AgentFailedEvent,
   type AgentStartedEvent,
@@ -65,27 +71,9 @@ export async function handleMeshLoop(c: any, options: MeshControllerOptions): Pr
   const log = getLog();
 
   return streamSSE(c, async (stream) => {
-    let orchestratorTokens = 0;
-    let frontendTokens = 0;
-    let backendTokens = 0;
-    let qualityTokens = 0;
-    let securityTokens = 0;
-    let testerTokens = 0;
-    let opsTokens = 0;
-    let orchestratorCost = 0;
-    let frontendCost = 0;
-    let backendCost = 0;
-    let qualityCost = 0;
-    let securityCost = 0;
-    let testerCost = 0;
-    let opsCost = 0;
-
-    // Pricing configuration (per 1M tokens as of 2025)
-    const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-      "claude-opus-4-6": { input: 15.0, output: 75.0 },
-      "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
-      "claude-haiku-4-5-20251001": { input: 0.25, output: 1.25 },
-    };
+    const tokenTracker = new TokenTracker();
+    const currentModel = process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
+    const currentPricing = getPricingForModel(currentModel);
 
     // Helper to get model name for an agent step
     const getModelForStep = (step: {
@@ -97,32 +85,6 @@ export async function handleMeshLoop(c: any, options: MeshControllerOptions): Pr
       }
       return getModelForAgent(step.agent);
     };
-
-    // Helper to get pricing for a model
-    const getPricingForModel = (modelName: string) => {
-      return MODEL_PRICING[modelName] || MODEL_PRICING["claude-opus-4-6"];
-    };
-
-    const currentModel = process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
-    const currentPricing =
-      MODEL_PRICING[currentModel] || MODEL_PRICING["claude-opus-4-6"];
-
-    // Extract input/output tokens and calculate cost
-    const extractTokenDetails = (res: any) => {
-      const usage = res?.usage_metadata || {};
-      const inputTokens = usage.input_tokens || 0;
-      const outputTokens = usage.output_tokens || 0;
-      const totalTokens = usage.total_tokens || inputTokens + outputTokens;
-
-      const cost =
-        (inputTokens / 1_000_000) * currentPricing.input +
-        (outputTokens / 1_000_000) * currentPricing.output;
-
-      return { inputTokens, outputTokens, totalTokens, cost };
-    };
-
-    // Format cost for display
-    const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
 
     try {
       const body = await c.req.json();
@@ -253,9 +215,15 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
           ticket.task,
           mode as "develop" | "fix" | "review" | "ops" | "chat",
         );
-        const orchestratorTokenDetails = extractTokenDetails(plan.raw);
-        orchestratorTokens += orchestratorTokenDetails.totalTokens;
-        orchestratorCost += orchestratorTokenDetails.cost;
+        const orchestratorTokenDetails = extractTokenDetails(
+          plan.raw,
+          currentPricing,
+        );
+        tokenTracker.addUsage(
+          "orchestrator",
+          orchestratorTokenDetails.totalTokens,
+          orchestratorTokenDetails.cost,
+        );
         console.log(
           color.cyan(`[Mesh]`) +
             ` ` +
@@ -392,6 +360,10 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                 const agenticConfig = agenticAgentRegistry[agent];
                 const useAgentic = process.env.CEREBRO_AGENTIC !== "false";
 
+                // Get pricing for this step's model
+                const modelName = getModelForStep(step);
+                const modelPricing = getPricingForModel(modelName);
+
                 let agentFileChanges: FileChange[] = [];
                 let tokenCount = 0;
                 let agentCost = 0;
@@ -399,8 +371,6 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                 if (useAgentic && agenticConfig) {
                   // AGENTIC MODE: use tool-calling loop
                   const executor = new ToolExecutor({ workspaceRoot });
-                  const modelName = getModelForStep(step);
-                  const modelPricing = getPricingForModel(modelName);
                   const loopResult = await runAgentLoop({
                     systemPrompt: agenticConfig.systemPrompt
                       .replace("{workspaceContext}", contextString)
@@ -488,7 +458,7 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                     context,
                     workspaceContext: contextString,
                   });
-                  const tokenDetails = extractTokenDetails(result);
+                  const tokenDetails = extractTokenDetails(result, modelPricing);
                   tokenCount = tokenDetails.totalTokens;
                   agentCost = tokenDetails.cost;
                 }
@@ -528,32 +498,11 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                 processedAgents.add(agent);
 
                 // Track tokens per agent
-                switch (agent) {
-                  case "frontend":
-                    frontendTokens += tokenDetails.totalTokens;
-                    frontendCost += tokenDetails.cost;
-                    break;
-                  case "backend":
-                    backendTokens += tokenDetails.totalTokens;
-                    backendCost += tokenDetails.cost;
-                    break;
-                  case "quality":
-                    qualityTokens += tokenDetails.totalTokens;
-                    qualityCost += tokenDetails.cost;
-                    break;
-                  case "security":
-                    securityTokens += tokenDetails.totalTokens;
-                    securityCost += tokenDetails.cost;
-                    break;
-                  case "tester":
-                    testerTokens += tokenDetails.totalTokens;
-                    testerCost += tokenDetails.cost;
-                    break;
-                  case "ops":
-                    opsTokens += tokenDetails.totalTokens;
-                    opsCost += tokenDetails.cost;
-                    break;
-                }
+                tokenTracker.addUsage(
+                  agent,
+                  tokenDetails.totalTokens,
+                  tokenDetails.cost,
+                );
               } else {
                 const reason =
                   r.reason instanceof Error
@@ -773,44 +722,16 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
             `[Mesh] Pipeline successfully achieved consensus. Halting.`,
           );
 
-          const totalTokens =
-            orchestratorTokens +
-            backendTokens +
-            frontendTokens +
-            qualityTokens +
-            securityTokens +
-            testerTokens +
-            opsTokens;
-          const totalCost =
-            orchestratorCost +
-            backendCost +
-            frontendCost +
-            qualityCost +
-            securityCost +
-            testerCost +
-            opsCost;
+          const totals = tokenTracker.getTotals();
           console.log(
             color.bgBlue(
               color.white(
-                `\n 📊 Total Tokens Consumed: ${totalTokens} | Cost: ${formatCost(totalCost)} \n`,
+                `\n 📊 Total Tokens Consumed: ${totals.tokens} | Cost: ${formatCost(totals.cost)} \n`,
               ),
             ),
           );
 
-          const tokenUsage = {
-            orchestrator: {
-              tokens: orchestratorTokens,
-              cost: orchestratorCost,
-            },
-            frontend: { tokens: frontendTokens, cost: frontendCost },
-            backend: { tokens: backendTokens, cost: backendCost },
-            quality: { tokens: qualityTokens, cost: qualityCost },
-            security: { tokens: securityTokens, cost: securityCost },
-            tester: { tokens: testerTokens, cost: testerCost },
-            ops: { tokens: opsTokens, cost: opsCost },
-            total: { tokens: totalTokens, cost: totalCost },
-            model: currentModel,
-          };
+          const tokenUsage = tokenTracker.toUsageReport(currentModel);
 
           const ticketCompletedEvent: TicketCompletedEvent = {
             type: "ticket_completed",
