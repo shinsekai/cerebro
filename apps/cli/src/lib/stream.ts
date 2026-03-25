@@ -86,10 +86,13 @@ export async function streamEngineResponse(
               try {
                 eventData = JSON.parse(fullData) as CerebroEvent;
                 // Check if it's a CerebroEvent by checking for 'type' field
+                // Do NOT consume approval events as typed — they need the legacy handler
+                // which stops the spinner, shows file diffs, and prompts the user
                 if (
                   eventData &&
                   typeof eventData === "object" &&
-                  "type" in eventData
+                  "type" in eventData &&
+                  eventData.type !== "approval_requested"
                 ) {
                   handleTypedEvent(eventData, payload.spinner, undefined);
                   handledAsTyped = true;
@@ -147,7 +150,10 @@ export async function streamEngineResponse(
                   log.error(`Error processing review result: ${error}`);
                 }
               }
-            } else if (!handledAsTyped && currentEvent === "approval_request") {
+            } else if (
+              !handledAsTyped &&
+              currentEvent === "approval_requested"
+            ) {
               // Handle approval request
               try {
                 const approvalData = JSON.parse(
