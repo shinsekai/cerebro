@@ -44,41 +44,49 @@ async function main() {
 
   if (action === "help") {
     await renderHeader(cwd());
-    console.log(`${color.bold("Usage:")} cerebro [command] [options]\n`);
-    console.log(`${color.bold("Commands:")}`);
+    console.log(`  ${color.bold("USAGE")}`);
+    console.log(`    cerebro <command> [options]\n`);
+    console.log(`  ${color.bold("COMMANDS")}`);
     console.log(
-      `  ${color.cyan("develop")} <feature>   Trigger the AI Mesh to scaffold & verify a new feature`,
+      `    ${color.cyan("develop".padEnd(20))} <feature>    Scaffold a new feature with AI agents`,
     );
     console.log(
-      `  ${color.cyan("init")}                Initialize Cerebro context in the current workspace`,
+      `    ${color.cyan("fix".padEnd(20))} <description> Diagnose and patch bugs automatically`,
     );
     console.log(
-      `  ${color.cyan("fix")}                 Diagnose and patch bugs automatically`,
+      `    ${color.cyan("review".padEnd(20))} [branch]      Deep code quality & security analysis`,
     );
     console.log(
-      `  ${color.cyan("review")}              Conduct a deep AST code quality review`,
+      `    ${color.cyan("ops".padEnd(20))} <task>         Generate Docker, CI/CD, infrastructure`,
     );
     console.log(
-      `  ${color.cyan("ops")}                 Design robust 12-factor Cloud Infrastructure`,
+      `    ${color.cyan("chat".padEnd(20))}               Interactive REPL for iterative development`,
     );
     console.log(
-      `  ${color.cyan("chat")}                Open persistent REPL for iterative development`,
+      `    ${color.cyan("init".padEnd(20))}               Scan workspace and initialize context`,
     );
     console.log(
-      `  ${color.cyan("logs")}                List recent execution logs`,
+      `    ${color.cyan("logs".padEnd(20))}               List recent execution logs`,
     );
     console.log(
-      `  ${color.cyan("replay")} <id>        Replay a past execution log`,
+      `    ${color.cyan("replay".padEnd(20))} <id>          Replay a past execution\n`,
+    );
+    console.log(`  ${color.bold("OPTIONS")}`);
+    console.log(`    -h, --help           Show this help message`);
+    console.log(`    --new-session        Force a fresh session`);
+    console.log(
+      `    --fast               Instant replay (no simulated delays)\n`,
+    );
+    console.log(`  ${color.bold("EXAMPLES")}`);
+    console.log(
+      `    ${color.dim('cerebro develop "Add JWT auth with refresh tokens"')}`,
     );
     console.log(
-      `  ${color.cyan("help")}                Show this interactive help message\n`,
+      `    ${color.dim('cerebro fix "TypeError in src/api/users.ts:42"')}`,
     );
-    console.log(`${color.bold("Options:")}`);
-    console.log(`  -h, --help        Show this help menu`);
-    console.log(
-      `  --new-session      Force a fresh session (ignore existing context)`,
-    );
-    console.log(`  --fast             Instant replay (no simulated delays)\n`);
+    console.log(`    ${color.dim("cerebro review main")}`);
+    console.log(`    ${color.dim('cerebro ops "Generate GitHub Actions CI"')}`);
+    console.log(`    ${color.dim("cerebro chat")}`);
     process.exit(0);
   }
 
