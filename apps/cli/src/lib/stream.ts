@@ -1,4 +1,3 @@
-import { Logger } from "@cerebro/core";
 import type {
   ApprovalRequestedEvent,
   ApprovalResponse,
@@ -8,10 +7,11 @@ import type {
   FileChange,
   ReviewResultEvent,
 } from "@cerebro/core";
+import { Logger } from "@cerebro/core";
 import { confirm, isCancel, multiselect, text } from "@clack/prompts";
 import color from "picocolors";
 import { displayFileContent } from "../ui/display.js";
-import { handleTypedEvent } from "../ui/events.js";
+import { handleTypedEvent, resetProgressState } from "../ui/events.js";
 import { ensureLogsDir, writeLogEntry } from "./log-store.js";
 
 const log = new Logger("cli");
@@ -30,6 +30,9 @@ export interface StreamEngineResponsePayload {
 export async function streamEngineResponse(
   payload: StreamEngineResponsePayload,
 ): Promise<{ success: boolean; data: DoneEvent | ErrorEvent | null }> {
+  // Reset progress state for new execution
+  resetProgressState();
+
   const res = await fetch(payload.url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -88,11 +91,7 @@ export async function streamEngineResponse(
                   typeof eventData === "object" &&
                   "type" in eventData
                 ) {
-                  handleTypedEvent(
-                    eventData,
-                    payload.spinner,
-                    payload.onReviewResult,
-                  );
+                  handleTypedEvent(eventData, payload.spinner, undefined);
                   handledAsTyped = true;
 
                   // Log typed event
