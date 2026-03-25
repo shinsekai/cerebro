@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { cwd } from "node:process";
 import { parseArgs } from "node:util";
 import { isCancel, outro, select, spinner, text } from "@clack/prompts";
@@ -97,6 +98,17 @@ async function main() {
     await checkEnvironment(cwd());
   }
 
+  // First-time welcome message
+  const profilePath = `${cwd()}/.cerebro/profile.json`;
+  if (!existsSync(profilePath)) {
+    console.log(
+      color.cyan("\n  Welcome to Cerebro! ") +
+        "Run " +
+        color.bold("init") +
+        " to scan your workspace.\n",
+    );
+  }
+
   // Main loop - keeps CLI running until user quits
   while (true) {
     if (!action) {
@@ -104,15 +116,32 @@ async function main() {
         message: "What would you like to do?",
         options: [
           {
-            value: "init",
-            label: "Initialize Cerebro context in this repository",
+            value: "develop",
+            label: "🚀 Develop",
+            hint: "scaffold a feature with AI agents",
           },
-          { value: "develop", label: "Develop a new feature" },
-          { value: "fix", label: "Fix a bug or issue" },
-          { value: "review", label: "Review code / PR" },
-          { value: "ops", label: "Perform Infrastructure Tasks" },
-          { value: "chat", label: "Open Chat REPL" },
-          { value: "quit", label: "Quit" },
+          { value: "fix", label: "🔧 Fix", hint: "diagnose and patch a bug" },
+          {
+            value: "review",
+            label: "🔍 Review",
+            hint: "code quality & security analysis",
+          },
+          {
+            value: "ops",
+            label: "⚙️  Ops",
+            hint: "Docker, CI/CD, infrastructure",
+          },
+          {
+            value: "chat",
+            label: "💬 Chat",
+            hint: "interactive REPL for iterating",
+          },
+          {
+            value: "init",
+            label: "📦 Init",
+            hint: "scan workspace & build context",
+          },
+          { value: "quit", label: "👋 Quit", hint: "exit Cerebro" },
         ],
       })) as string;
 
@@ -129,8 +158,8 @@ async function main() {
 
     if (action === "develop" && !taskDesc) {
       taskDesc = (await text({
-        message: "Describe the feature you want to develop:",
-        placeholder: "e.g., authentication system using JWT",
+        message: "What would you like to build?",
+        placeholder: 'e.g., "Add JWT authentication with refresh tokens"',
         validate: (value) => {
           if (!value) return "Please provide a description.";
         },
@@ -144,8 +173,8 @@ async function main() {
 
     if (action === "fix" && !taskDesc) {
       taskDesc = (await text({
-        message: "Describe the bug or paste the error/stack trace:",
-        placeholder: "e.g., TypeError in src/api/users.ts:42",
+        message: "Describe the bug or paste the error:",
+        placeholder: 'e.g., "TypeError: Cannot read property id of undefined"',
         validate: (value) => {
           if (!value) return "Please provide a description.";
         },
@@ -274,6 +303,9 @@ async function main() {
         s.stop(color.red(`✖ Unknown command: ${action}`));
         process.exit(1);
     }
+
+    // Visual separator between command executions
+    console.log(color.dim(`\n${"─".repeat(50)}\n`));
 
     // Reset for next loop iteration
     action = null;
