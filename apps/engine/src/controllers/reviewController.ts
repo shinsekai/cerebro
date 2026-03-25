@@ -12,6 +12,12 @@ import {
   StateTicketSchema,
 } from "@cerebro/core";
 import {
+  extractTokenDetails,
+  formatCost,
+  getPricingForModel,
+} from "../services/pricing.js";
+import { TokenTracker } from "../services/tokenTracker.js";
+import {
   buildWorkspaceContext,
   formatContextForPrompt,
 } from "@cerebro/workspace";
@@ -27,45 +33,9 @@ export async function handleMeshReview(c: any, deps: ReviewControllerDeps): Prom
   const log = getLog();
 
   return streamSSE(c, async (stream) => {
-    let orchestratorTokens = 0;
-    let qualityTokens = 0;
-    let securityTokens = 0;
-    let orchestratorCost = 0;
-    let qualityCost = 0;
-    let securityCost = 0;
-
-    // Pricing configuration (per 1M tokens as of 2025)
-    const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-      "claude-opus-4-6": { input: 15.0, output: 75.0 },
-      "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
-      "claude-haiku-4-5-20251001": { input: 0.25, output: 1.25 },
-    };
-
-    // Helper to get pricing for a model
-    const getPricingForModel = (modelName: string) => {
-      return MODEL_PRICING[modelName] || MODEL_PRICING["claude-opus-4-6"];
-    };
-
+    const tokenTracker = new TokenTracker();
     const currentModel = process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
-    const currentPricing =
-      MODEL_PRICING[currentModel] || MODEL_PRICING["claude-opus-4-6"];
-
-    // Extract input/output tokens and calculate cost
-    const extractTokenDetails = (res: any) => {
-      const usage = res?.usage_metadata || {};
-      const inputTokens = usage.input_tokens || 0;
-      const outputTokens = usage.output_tokens || 0;
-      const totalTokens = usage.total_tokens || inputTokens + outputTokens;
-
-      const cost =
-        (inputTokens / 1_000_000) * currentPricing.input +
-        (outputTokens / 1_000_000) * currentPricing.output;
-
-      return { inputTokens, outputTokens, totalTokens, cost };
-    };
-
-    // Format cost for display
-    const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
+    const currentPricing = getPricingForModel(currentModel);
 
     try {
       const body = await c.req.json();
@@ -134,9 +104,15 @@ export async function handleMeshReview(c: any, deps: ReviewControllerDeps): Prom
         `[Tier 1 Orchestrator] Analyzing review request...`,
       );
       const plan: any = await orchestrator.planExecution(ticket.task, "review");
-      const orchestratorTokenDetails = extractTokenDetails(plan.raw);
-      orchestratorTokens += orchestratorTokenDetails.totalTokens;
-      orchestratorCost += orchestratorTokenDetails.cost;
+      const orchestratorTokenDetails = extractTokenDetails(
+        plan.raw,
+        currentPricing,
+      );
+      tokenTracker.addUsage(
+        "orchestrator",
+        orchestratorTokenDetails.totalTokens,
+        orchestratorTokenDetails.cost,
+      );
       console.log(
         color.cyan(`[Review]`) +
           ` ` +
@@ -261,12 +237,10 @@ Severity levels:
 If you find no issues, return an empty array: []`;
 
           const result: any = await reviewModel.invoke(reviewPrompt);
-          const tokenDetails = extractTokenDetails(result);
-          tokenCount = tokenDetails.totalTokens;
           const modelPricing = getPricingForModel(reviewModelName);
-          agentCost =
-            (tokenDetails.inputTokens / 1_000_000) * modelPricing.input +
-            (tokenDetails.outputTokens / 1_000_000) * modelPricing.output;
+          const tokenDetails = extractTokenDetails(result, modelPricing);
+          tokenCount = tokenDetails.totalTokens;
+          agentCost = tokenDetails.cost;
 
           try {
             const content = result.content as string;
@@ -311,13 +285,7 @@ If you find no issues, return an empty array: []`;
         await emitEvent(stream, agentCompletedEvent);
 
         // Track tokens
-        if (agent === "quality") {
-          qualityTokens += tokenCount;
-          qualityCost += agentCost;
-        } else {
-          securityTokens += tokenCount;
-          securityCost += agentCost;
-        }
+        tokenTracker.addUsage(agent, tokenCount, agentCost);
 
         // Merge findings
         allFindings.push(...agentFindings);
@@ -334,26 +302,16 @@ If you find no issues, return an empty array: []`;
       };
       await emitEvent(stream, reviewResultEvent);
 
-      const totalTokens = orchestratorTokens + qualityTokens + securityTokens;
-      const totalCost = orchestratorCost + qualityCost + securityCost;
+      const totals = tokenTracker.getTotals();
       console.log(
         color.bgBlue(
           color.white(
-            `\n 📊 Total Tokens Consumed: ${totalTokens} | Cost: ${formatCost(totalCost)} \n`,
+            `\n 📊 Total Tokens Consumed: ${totals.tokens} | Cost: ${formatCost(totals.cost)} \n`,
           ),
         ),
       );
 
-      const tokenUsage = {
-        orchestrator: {
-          tokens: orchestratorTokens,
-          cost: orchestratorCost,
-        },
-        quality: { tokens: qualityTokens, cost: qualityCost },
-        security: { tokens: securityTokens, cost: securityCost },
-        total: { tokens: totalTokens, cost: totalCost },
-        model: currentModel,
-      };
+      const tokenUsage = tokenTracker.toUsageReport(currentModel);
 
       // Also send legacy 'done' event for backward compatibility
       const doneEvent: DoneEvent = {
