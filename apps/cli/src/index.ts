@@ -15,6 +15,7 @@ import { runReview } from "./commands/review.js";
 import { getActionableError } from "./lib/errors.js";
 
 // UI modules
+import { checkEnvironment } from "./ui/checks.js";
 import { renderHeader } from "./ui/header.js";
 
 const { positionals, values } = parseArgs({
@@ -82,6 +83,11 @@ async function main() {
   }
 
   await renderHeader(cwd());
+
+  // Skip environment checks for logs and replay commands
+  if (command !== "logs" && command !== "replay") {
+    await checkEnvironment(cwd());
+  }
 
   // Main loop - keeps CLI running until user quits
   while (true) {
