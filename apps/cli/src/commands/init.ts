@@ -7,7 +7,7 @@ import {
   scanWorkspace,
 } from "@cerebro/workspace";
 import type { Spinner } from "@clack/prompts";
-import { confirm, spinner } from "@clack/prompts";
+import { confirm, isCancel, spinner } from "@clack/prompts";
 import color from "picocolors";
 import { findWorkspaceRoot } from "../lib/workspace.js";
 
