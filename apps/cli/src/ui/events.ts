@@ -163,24 +163,47 @@ export function handleTypedEvent(
     }
 
     case "tool_call": {
-      const toolDisplay =
-        event.tool === "run_command"
-          ? `run ${event.input.slice(0, 40)}`
-          : `${event.tool} ${event.input.slice(0, 35)}`;
-      updateSpinner(
-        spinnerState,
-        color.dim(`  │  ↳ ${toolDisplay} (${getSpinnerMessage()})`),
-      );
+      // Show ONLY the tool name + key argument, never raw JSON
+      let summary = event.tool;
+      try {
+        const input =
+          typeof event.input === "string"
+            ? JSON.parse(event.input)
+            : event.input;
+        if (input.path) summary += ` ${input.path}`;
+        else if (input.command)
+          summary += ` ${String(input.command).slice(0, 30)}`;
+        else if (input.query)
+          summary += ` "${String(input.query).slice(0, 20)}"`;
+        else if (input.summary) summary += ` (completing)`;
+      } catch {
+        // input is not JSON — show first 30 chars
+        summary += ` ${String(event.input).slice(0, 30)}`;
+      }
+      updateSpinner(spinnerState, color.dim(`  │  ↳ ${summary}`));
       break;
     }
 
     case "tool_result": {
-      // Silent by default — only show errors
-      if (event.result.includes('"error"')) {
-        updateSpinner(
-          spinnerState,
-          color.red(`  │  ✖ ${event.result.slice(0, 60)}`),
-        );
+      // SILENT — never show tool results in the spinner.
+      // The tool_call line already told the user what's happening.
+      // Only surface explicit errors:
+      try {
+        const result =
+          typeof event.result === "string"
+            ? event.result
+            : JSON.stringify(event.result);
+        if (result.includes('"error"')) {
+          const parsed = JSON.parse(result);
+          if (parsed.error) {
+            updateSpinner(
+              spinnerState,
+              color.red(`  │  ✖ ${String(parsed.error).slice(0, 50)}`),
+            );
+          }
+        }
+      } catch {
+        // Silent
       }
       break;
     }
@@ -204,36 +227,8 @@ export function handleTypedEvent(
     }
 
     case "log": {
-      // Parse log events for phase transitions and wave info
-      const msg = event.message;
-
-      // Extract workspace scan info: "[Context] Workspace scanned: hono / typescript"
-      if (msg.includes("[Context] Workspace scanned:")) {
-        const match = msg.match(/Workspace scanned:\s*(.+?)\s*\/\s*(.+)/);
-        if (match) {
-          const framework = match[1];
-          const language = match[2];
-          updateSpinner(
-            spinnerState,
-            color.dim(`Context: ${framework} / ${language}`),
-          );
-        }
-        return;
-      }
-
-      // Extract orchestrator planning status
-      if (msg.includes("[Tier 1 Orchestrator]")) {
-        if (msg.includes("Analyzing request and planning constraints")) {
-          progressState.currentPhase = "plan";
-          updateSpinner(
-            spinnerState,
-            color.dim(`Planning: ${msg.split(": ")[1]}`),
-          );
-        } else if (msg.includes("Plan generated successfully")) {
-          updateSpinner(spinnerState, color.dim(`Plan generated`));
-        }
-        return;
-      }
+      // Only show meaningful logs, skip noisy internal ones
+      const msg = event.message ?? "";
 
       // Extract wave info: "[Control Plane] Wave 1/2: backend, frontend"
       if (msg.includes("[Control Plane] Wave ")) {
@@ -250,16 +245,6 @@ export function handleTypedEvent(
         return;
       }
 
-      // Extract approval phase
-      if (
-        msg.includes("[Approval] Generated") ||
-        msg.includes("Awaiting user approval")
-      ) {
-        progressState.currentPhase = "approve";
-        updateSpinner(spinnerState, color.dim(`Reviewing changes...`));
-        return;
-      }
-
       // Extract file write phase
       if (
         msg.includes("[Approval] Approved. Writing") ||
@@ -270,17 +255,15 @@ export function handleTypedEvent(
         return;
       }
 
-      // Only show non-trivial logs
+      // Only show select non-trivial logs
       if (
-        !msg.includes("Initializing") &&
-        !msg.includes("Circuit Breaker") &&
-        !msg.includes("[Control Plane]") &&
-        !msg.includes("[Tier 1 Orchestrator]") &&
-        !msg.includes("[Context]") &&
-        !msg.includes("[Files]")
+        msg.includes("[Context]") ||
+        msg.includes("[Orchestrator]") ||
+        msg.includes("Plan:")
       ) {
-        updateSpinner(spinnerState, color.dim(`  ${msg.slice(0, 70)}`));
+        updateSpinner(spinnerState, color.dim(msg.slice(0, 60)));
       }
+      // Skip: "Initializing", "Circuit Breaker", tool-related logs
       break;
     }
   }
