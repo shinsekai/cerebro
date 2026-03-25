@@ -296,10 +296,9 @@ export async function streamEngineResponse(
                 process.exit(1);
               }
             } else {
-              const safeData = fullData.replace(/\r?\n|\r/g, " ").trim();
-              if (safeData.length > 0) {
-                payload.spinner.message(color.blue(safeData));
-              }
+              // Unrecognized event — log at debug level only, don't spam the spinner
+              // Typed events are handled by handleTypedEvent in ui/events.ts
+              // Only done/error/approval_request/review_result reach this block
             }
           }
           // Reset for next event block

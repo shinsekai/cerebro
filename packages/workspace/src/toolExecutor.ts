@@ -258,6 +258,9 @@ const DEFAULT_ALLOWED_COMMANDS = [
   "git",
   "make",
   "cmake",
+  "just",
+  "terraform",
+  "pulumi",
   // Unix
   "cat",
   "ls",
