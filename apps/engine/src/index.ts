@@ -564,7 +564,9 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
           console.log(
             color.cyan(`[Mesh]`) +
               ` ` +
-              color.cyan(`[Control Plane] Plan: ${plan.content.summary}`),
+              color.cyan(
+                `[Control Plane] Plan: ${plan.content.summary.slice(0, 80)}`,
+              ),
           );
           await emitLog(
             stream,
@@ -641,12 +643,24 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                     toolExecutor: executor,
                     maxIterations: 15,
                     onToolCall: async (name, input) => {
+                      // Compact: "↳ read_file Makefile" not "read_file({"path":"Makefile"})"
+                      let summary = name;
+                      try {
+                        const parsed =
+                          typeof input === "string" ? JSON.parse(input) : input;
+                        if (parsed.path) summary += ` ${parsed.path}`;
+                        else if (parsed.command)
+                          summary += ` ${String(parsed.command).slice(0, 40)}`;
+                        else if (parsed.query)
+                          summary += ` "${String(parsed.query).slice(0, 25)}"`;
+                        else if (parsed.summary) summary += ` (completing)`;
+                      } catch {
+                        summary += ` ${JSON.stringify(input).slice(0, 40)}`;
+                      }
                       console.log(
                         color.cyan(`[Mesh]`) +
                           ` ` +
-                          color.dim(
-                            `[Tier 2 ${agent}] Tool: ${name}(${JSON.stringify(input).slice(0, 100)})`,
-                          ),
+                          color.dim(`  ↳ ${summary}`),
                       );
                       const toolCallEvent: ToolCallEvent = {
                         type: "tool_call",
@@ -657,13 +671,18 @@ Files changed: ${fileChanges ? fileChanges.join(", ") : "none"}
                       await emitEvent(stream, toolCallEvent);
                     },
                     onToolResult: async (_name, result) => {
-                      console.log(
-                        color.cyan(`[Mesh]`) +
-                          ` ` +
-                          color.dim(
-                            `[Tier 2 ${agent}] → ${result.slice(0, 150)}`,
-                          ),
-                      );
+                      // Silent on success — the tool_call log already told us what happened.
+                      // Only log errors to the engine console.
+                      if (
+                        result.includes('"error"') ||
+                        result.startsWith("Error:")
+                      ) {
+                        console.log(
+                          color.cyan(`[Mesh]`) +
+                            ` ` +
+                            color.red(`  ✖ ${result.slice(0, 80)}`),
+                        );
+                      }
                       const toolResultEvent: ToolResultEvent = {
                         type: "tool_result",
                         agent,
